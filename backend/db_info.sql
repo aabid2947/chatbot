@@ -1,6 +1,7 @@
--- Everything in the chatbot database, in four views.
--- Run from the chatbot folder:
---   bash db.sh info
+-- Everything in the chatbot database, in four views, printed in the terminal.
+-- For the same views as CSV files, run `bash db.sh info` instead.
+-- To print these, from the chatbot folder, all on ONE line:
+--   MYSQL_PWD=chatbot ~/mysqlportable/bin/mysql.exe -h127.0.0.1 -uchatbot chatbot -t < backend/db_info.sql
 
 -- 1. Tables, exact row counts and size on disk
 SELECT t.table_name AS `table`,
