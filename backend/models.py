@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 
 from flask_sqlalchemy import SQLAlchemy
@@ -9,10 +10,15 @@ def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def new_conversation_id():
+    return str(uuid.uuid4())
+
+
 class Conversation(db.Model):
     __tablename__ = "conversations"
 
-    id = db.Column(db.Integer, primary_key=True)
+    # A UUID string, e.g. "3f2b8c1e-...". Every API call about a chat uses it.
+    id = db.Column(db.CHAR(36), primary_key=True, default=new_conversation_id)
     title = db.Column(db.String(200), nullable=False, default="New chat")
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
@@ -38,7 +44,7 @@ class Message(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     conversation_id = db.Column(
-        db.Integer,
+        db.CHAR(36),
         db.ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

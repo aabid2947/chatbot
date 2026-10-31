@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chatbot Plan</title>
+<style>
+:root{
+  --bg:#f7f6f3; --card:#ffffff; --ink:#1d1d1b; --muted:#6b6a65; --line:#e4e2dc;
+  --accent:#3b5bdb; --accent-soft:#e7ecff; --green:#2b8a3e; --green-soft:#e6f4ea;
+  --amber:#b7791f; --amber-soft:#fdf3e1; --grey-soft:#efeeea; --code:#f1efe9;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#151513; --card:#1e1e1b; --ink:#ecebe6; --muted:#9d9b94; --line:#33322e;
+    --accent:#8ea4ff; --accent-soft:#232a45; --green:#6cc488; --green-soft:#1d2e22;
+    --amber:#e3b25c; --amber-soft:#33291a; --grey-soft:#2a2a26; --code:#26261f;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,"Segoe UI",Inter,Roboto,sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:40px 16px 80px}
+header h1{font-size:2rem;margin:0 0 6px;letter-spacing:-.02em}
+header p{color:var(--muted);margin:0;max-width:680px}
+nav{display:flex;flex-wrap:wrap;gap:8px;margin:24px 0 8px}
+nav a{font-size:.85rem;color:var(--accent);text-decoration:none;background:var(--accent-soft);
+  padding:4px 10px;border-radius:999px}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:24px;margin-top:20px}
+h2{margin:0 0 14px;font-size:1.25rem;letter-spacing:-.01em}
+h3{margin:22px 0 8px;font-size:1rem}
+p{margin:8px 0}
+ul{margin:8px 0;padding-left:20px}
+li{margin:3px 0}
+.muted{color:var(--muted)}
+code{background:var(--code);padding:1px 6px;border-radius:5px;font-size:.88em;
+  font-family:ui-monospace,"Cascadia Code",Consolas,monospace}
+pre{background:var(--code);padding:14px 16px;border-radius:10px;overflow-x:auto;
+  font:13px/1.55 ui-monospace,"Cascadia Code",Consolas,monospace;margin:10px 0}
+pre code{background:none;padding:0}
+.table-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.tile{border:1px solid var(--line);border-radius:10px;padding:14px}
+.tile b{display:block;margin-bottom:4px}
+.tile span{color:var(--muted);font-size:.9rem}
+
+/* flow diagram */
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin:14px 0}
+.step{flex:1 1 150px;border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--bg)}
+.step small{display:block;color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}
+.step b{display:block;margin:2px 0 4px}
+.step span{font-size:.88rem;color:var(--muted)}
+.arrow{align-self:center;color:var(--muted);font-size:1.2rem}
+
+/* prompt stack */
+.stack{display:flex;flex-direction:column;gap:6px;margin:12px 0}
+.layer{display:flex;justify-content:space-between;gap:12px;align-items:center;
+  border-radius:8px;padding:10px 14px;font-size:.93rem}
+.layer em{font-style:normal;color:var(--muted);font-size:.85rem;white-space:nowrap}
+.l1{background:var(--grey-soft)} .l2{background:var(--green-soft)} .l3{background:var(--accent-soft)}
+.l4{background:var(--amber-soft)} .l5{background:var(--accent-soft)} .l6{background:var(--grey-soft)}
+
+/* score bar */
+.scale{position:relative;margin:26px 0 40px}
+.bar{display:flex;height:34px;border-radius:8px;overflow:hidden;font-size:.85rem;font-weight:600}
+.bar div{display:flex;align-items:center;justify-content:center}
+.arch{flex:30;background:var(--grey-soft);color:var(--muted)}
+.known{flex:30;background:var(--amber-soft);color:var(--amber)}
+.pin{flex:40;background:var(--green-soft);color:var(--green)}
+.ticks{position:relative;height:18px;font-size:.78rem;color:var(--muted)}
+.ticks span{position:absolute;transform:translateX(-50%);top:4px}
+.marks{position:relative;height:0}
+.mark{position:absolute;top:-58px;transform:translateX(-50%);font-size:.75rem;white-space:nowrap;
+  color:var(--ink);text-align:center}
+.mark::after{content:"";display:block;width:2px;height:14px;background:var(--ink);margin:2px auto 0;opacity:.6}
+
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:8px}
+.rule{border-radius:10px;padding:14px}
+.rule.up{background:var(--green-soft)} .rule.down{background:var(--amber-soft)} .rule.promo{background:var(--accent-soft)}
+.rule b{display:block;margin-bottom:4px}
+.rule p{margin:0;font-size:.92rem}
+
+.steps{counter-reset:s;list-style:none;padding:0}
+.steps li{counter-increment:s;position:relative;padding:12px 12px 12px 52px;border:1px solid var(--line);
+  border-radius:10px;margin:10px 0}
+.steps li::before{content:counter(s);position:absolute;left:14px;top:12px;width:26px;height:26px;
+  border-radius:50%;background:var(--accent);color:#fff;font-weight:700;display:flex;
+  align-items:center;justify-content:center;font-size:.85rem}
+.check{display:block;color:var(--muted);font-size:.9rem;margin-top:4px}
+.note{border-left:3px solid var(--amber);background:var(--amber-soft);padding:10px 14px;border-radius:6px;margin:12px 0;font-size:.93rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Personal chatbot: final plan</h1>
+  <p>A local chatbot for one person. It chats like a web LLM, answers and summarizes from uploaded PDFs,
+  and keeps its memory sharp however long a chat gets. Everything runs on this machine. The LLM is local
+  Claude Code, called fresh for every message.</p>
+  <nav>
+    <a href="#decisions">Decisions</a><a href="#flow">How a message flows</a><a href="#prompt">What each turn sends</a>
+    <a href="#scoring">Memory scoring</a><a href="#tools">Tools</a><a href="#pdfs">PDFs</a>
+    <a href="#db">Database</a><a href="#ui">UI</a><a href="#build">Build order</a><a href="#limits">Limits</a>
+  </nav>
+</header>
+
+<section id="status">
+  <h2>Status</h2>
+  <ul>
+    <li><b>Phase 1, chat and saving: done (backend only).</b> Conversation ids, every message saved, local Claude replies (whole or streamed), history, rename, automatic titles. Tested live with real Claude on 31 Oct 2026.</li>
+    <li>Phase 2, memory: next.</li>
+    <li>Phase 3, PDFs: after that.</li>
+  </ul>
+</section>
+
+<section id="decisions">
+  <h2>Decisions</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Area</th><th>Choice</th></tr>
+    <tr><td>App</td><td>Flask backend and React (Vite) frontend, run locally</td></tr>
+    <tr><td>Database</td><td>Local portable MySQL on port 3306 (started by <code>db.sh</code>), database <code>chatbot</code></td></tr>
+    <tr><td>Vector search</td><td>No pgvector. Embeddings are stored as number lists. The app does the matching itself and keeps them cached in memory.</td></tr>
+    <tr><td>Embeddings</td><td>A small local model (<code>bge-small-en-v1.5</code>). Downloaded once, then works offline.</td></tr>
+    <tr><td>PDF text</td><td><code>pypdf</code>, text pulled out page by page</td></tr>
+    <tr><td>File storage</td><td>A folder on disk: <code>chatbot/storage/uploads/</code></td></tr>
+    <tr><td>LLM</td><td><code>claude -p</code>, a fresh process for every call, nothing saved between calls</td></tr>
+    <tr><td>Tool calling</td><td>Our own tool server inside the app at <code>/api/mcp</code>, handed to each Claude call</td></tr>
+  </table></div>
+</section>
+
+<section id="flow">
+  <h2>How a message flows</h2>
+  <div class="flow">
+    <div class="step"><small>1</small><b>You send a message</b><span>Saved to MySQL in full</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><small>2</small><b>App builds the prompt</b><span>Facts, summary, PDF list, recent messages</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><small>3</small><b>Local Claude answers</b><span>Calls search tools if it needs more</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><small>4</small><b>Reply streams to you</b><span>Word by word, with page citations</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><small>5</small><b>Background tidy-up</b><span>Save facts, update scores, roll the summary</span></div>
+  </div>
+
+  <h3>The Claude call</h3>
+  <pre><code>claude -p
+  --setting-sources local       # none of your settings, hooks or CLAUDE.md
+  --disable-slash-commands      # no skills
+  --tools ""                    # no shell, file or web tools
+  --strict-mcp-config           # ignore every other tool server
+  --mcp-config &lt;per call&gt;       # only our tools, scoped to this chat
+  --allowedTools mcp__rag__*    # our tools run without prompts
+  --no-session-persistence      # nothing saved, every call is stateless
+  --system-prompt &lt;ours&gt;
+  --output-format stream-json --include-partial-messages
+  --model sonnet                # haiku for background jobs</code></pre>
+  <p class="muted">Tested on 31 Oct 2026. Calls are stateless. Claude calls our tools and cites pages. It can't see your personal instructions.
+  <code>--safe-mode</code> must not be used, because it also blocks our tools.</p>
+  <div class="note">Claude Code still adds your email, Windows paths and OS version to every call. That's fine here, because the bot is only for you.
+  Switching to the Anthropic API later means rewriting one file.</div>
+</section>
+
+<section id="history">
+  <h2>Conversations and history</h2>
+  <ul>
+    <li>Every conversation gets a <b>conversation id</b> when it's created. Every request about a chat uses that id.</li>
+    <li><b>Every message is saved</b> in full, with its conversation id, who sent it, and when. The memory system never deletes anything.</li>
+    <li>You can fetch the whole history of any conversation by its id, in order.</li>
+    <li>Conversations can be listed newest first, renamed and deleted.</li>
+    <li>Each conversation gets a title from its first message, made in the background.</li>
+  </ul>
+</section>
+
+<section id="prompt">
+  <h2>What each turn sends</h2>
+  <p>Rebuilt from the database every time. It stays about the same size however long the chat gets.</p>
+  <div class="stack">
+    <div class="layer l1">System prompt <em>fixed</em></div>
+    <div class="layer l2">Pinned facts about you <em>~500 tokens max</em></div>
+    <div class="layer l3">Rolling summary of the older chat <em>~1,000 tokens</em></div>
+    <div class="layer l4">This chat's PDFs: name, pages, one-line summary <em>small</em></div>
+    <div class="layer l5">Last ~12 messages, word for word <em>~4,000 tokens</em></div>
+    <div class="layer l6">Your new message</div>
+  </div>
+  <p class="muted">Everything else, Claude fetches with tools only when it needs it.</p>
+</section>
+
+<section id="scoring">
+  <h2>Memory: what's important, and confidence scores</h2>
+
+  <h3>What becomes a fact</h3>
+  <p>The test: <b>"Will this still matter in a future conversation?"</b> It only saves things you said or confirmed. It never saves its own guesses about you.</p>
+  <div class="grid">
+    <div class="tile"><b>Saved</b><span>Who you are, preferences, ongoing goals and projects, decisions, constraints, corrections</span></div>
+    <div class="tile"><b>Not saved</b><span>Small talk, one-off questions, Claude's own explanations, PDF content (that's searchable anyway)</span></div>
+  </div>
+
+  <h3>Confidence score, 0 to 1</h3>
+  <div class="scale">
+    <div class="marks">
+      <div class="mark" style="left:45%">passing mention<br>0.45</div>
+      <div class="mark" style="left:65%">dug up / promoted<br>0.65</div>
+      <div class="mark" style="left:80%">said clearly<br>0.7</div>
+      <div class="mark" style="left:99%">"remember this"<br>1.0</div>
+    </div>
+    <div class="bar">
+      <div class="arch">Archived</div><div class="known">Known</div><div class="pin">Pinned</div>
+    </div>
+    <div class="ticks"><span style="left:0;transform:none">0</span><span style="left:30%">0.3</span><span style="left:60%">0.6</span><span style="left:100%;transform:translateX(-100%)">1</span></div>
+  </div>
+  <div class="table-wrap"><table>
+    <tr><th>Tier</th><th>Score</th><th>What happens</th></tr>
+    <tr><td><b>Pinned</b></td><td>0.6 and up</td><td>Sent with every message</td></tr>
+    <tr><td><b>Known</b></td><td>0.3 to 0.6</td><td>Not sent. Claude finds it with <code>search_memory</code> when it's relevant.</td></tr>
+    <tr><td><b>Archived</b></td><td>below 0.3</td><td>Still saved and searchable. Hidden in the panel by default.</td></tr>
+  </table></div>
+  <p class="muted">Scoring never deletes anything. Only you delete facts. Note: the 0.7 marker sits at its real spot on the bar, just past 0.65.</p>
+
+  <div class="rules">
+    <div class="rule up"><b>You ask about it more → score goes up</b>
+      <p>Each time you bring it up, or Claude relies on it in an answer: <b>+0.15</b>, up to 1.0.</p></div>
+    <div class="rule down"><b>You ask about it less → score goes down</b>
+      <p>Each day you chat without it coming up: <b>−0.03</b>. Days you don't chat don't count, so a week away won't erase anything.
+      A clear fact stays pinned about 3 weeks of normal use. One mention brings it back.</p></div>
+    <div class="rule promo"><b>Unimportant, but you asked → promoted</b>
+      <p>If Claude has to dig something out of old messages, it becomes a fact at <b>0.65</b>, pinned straight away.
+      Then the normal rules apply.</p></div>
+  </div>
+
+  <h3>Other rules</h3>
+  <ul>
+    <li>"Remember this" sets 1.0 and <b>locks</b> the fact, so it never fades. You can unlock it.</li>
+    <li>"Forget that" removes it.</li>
+    <li>A new fact that contradicts an old one replaces it, so you never get both.</li>
+    <li>If pinned facts outgrow ~500 tokens, the highest scores go in and the rest act as Known.</li>
+    <li>Every score change is logged, so the panel can show "used 4 times, last today."</li>
+  </ul>
+
+  <h3>How "used" is detected</h3>
+  <p>After each reply, a background haiku call gets the latest exchange, the current facts, and the tools Claude used this turn.
+  It answers with: facts to <code>add</code>, <code>update</code> or <code>delete</code>, which facts were <code>used</code>,
+  and which old messages to <code>promote</code>. The app applies the score changes. Decay runs once at the start of each day you chat.</p>
+</section>
+
+<section id="tools">
+  <h2>Tools Claude can call</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Tool</th><th>What it does</th></tr>
+    <tr><td><code>search_pdfs(query, document?)</code></td><td>Best matching passages from this chat's PDFs, with file name and pages</td></tr>
+    <tr><td><code>get_document_summary(document)</code></td><td>The stored summary of a whole PDF</td></tr>
+    <tr><td><code>read_pdf_pages(document, from, to)</code></td><td>Exact text of specific pages, length capped</td></tr>
+    <tr><td><code>search_history(query)</code></td><td>Older messages from this chat, word for word</td></tr>
+    <tr><td><code>search_memory(query)</code></td><td>Known and Archived facts that match</td></tr>
+    <tr><td><code>remember_fact(fact)</code></td><td>Pins and locks a fact when you say "remember this"</td></tr>
+  </table></div>
+  <p class="muted">The tool address carries the chat id and a random secret, and only listens on this machine.</p>
+</section>
+
+<section id="pdfs">
+  <h2>PDF pipeline</h2>
+  <div class="flow">
+    <div class="step"><small>1</small><b>Upload</b><span>Saved to <code>storage/uploads/</code>, marked "processing"</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><small>2</small><b>Extract</b><span>Text page by page</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><small>3</small><b>Chunk</b><span>~800 tokens each, overlapping, page numbers kept</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><small>4</small><b>Embed</b><span>Local model, stored in MySQL</span></div>
+    <div class="arrow">→</div>
+    <div class="step"><small>5</small><b>Summarize</b><span>Section summaries, then one whole-PDF summary. Marked "ready".</span></div>
+  </div>
+  <p class="muted">Scanned PDFs (just images, no text) won't work yet. They'd need OCR.</p>
+</section>
+
+<section id="db">
+  <h2>Database</h2>
+  <p class="muted"><code>chatbot</code> on MySQL, 127.0.0.1:3306</p>
+  <pre><code>conversations(id char(36) uuid, title, summary, summarized_upto_id, created_at, updated_at)
+messages(id, conversation_id, role, content, embedding blob, created_at)
+facts(id, content, category, score, locked, origin, use_count, last_used_at,
+      source_message_id, embedding blob, created_at, updated_at)
+fact_events(id, fact_id, kind, delta, score_after, message_id, created_at)
+activity_days(day)
+documents(id, conversation_id, filename, stored_path, pages, status, summary, created_at)
+chunks(id, document_id, page_from, page_to, content, embedding blob)</code></pre>
+</section>
+
+<section id="ui">
+  <h2>UI</h2>
+  <div class="grid">
+    <div class="tile"><b>Sidebar</b><span>Your chats and a new chat button</span></div>
+    <div class="tile"><b>Chat</b><span>Streaming replies with markdown. Shows "Searching your PDFs…" while a tool runs.</span></div>
+    <div class="tile"><b>Upload</b><span>Button or drag and drop. Each PDF gets a processing → ready badge.</span></div>
+    <div class="tile"><b>Memory panel</b><span>Every fact with a score bar, grouped Pinned / Known / Archived. Edit, delete, lock. Click for its history.</span></div>
+  </div>
+</section>
+
+<section id="build">
+  <h2>Build order</h2>
+  <p class="muted">Around 1,500 lines in total. You can try each step in the browser as it lands.</p>
+  <ol class="steps">
+    <li><b>Chat and saving</b> — app, database, Claude adapter, streaming, chat list.
+      <span class="check">Check: chat with it, refresh the page, and the conversation is still there.</span></li>
+    <li><b>Memory</b> — facts, scores, rolling summary, history search, memory panel.
+      <span class="check">Check: mention something early, chat a lot, ask later. Watch its score bar rise when you bring it up.
+      Ask about a throwaway detail and see it show up as a new pinned fact.</span></li>
+    <li><b>PDFs</b> — upload, local storage, chunk and embed, PDF tools, summaries.
+      <span class="check">Check: upload a PDF, ask a question, and see a page citation. Then ask for a summary.</span></li>
+  </ol>
+</section>
+
+<section id="limits">
+  <h2>Known limits</h2>
+  <ul>
+    <li>Each reply has a few seconds of startup before text appears, because every call starts a fresh Claude process. Streaming hides most of it.</li>
+    <li>It uses your Claude subscription's usage.</li>
+    <li>The embedding model is English-focused. A multilingual one can be swapped in later.</li>
+    <li>Scanned PDFs need OCR, which isn't included yet.</li>
+  </ul>
+</section>
+
+</div>
+</body>
+</html>
