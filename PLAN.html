@@ -114,7 +114,8 @@ th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;l
   <ul>
     <li><b>Phase 1, chat and saving: done (backend only).</b> Conversation ids, every message saved, local Claude replies (whole or streamed), history, rename, automatic titles. Tested live with real Claude on 31 Oct 2026.</li>
     <li><b>Phase 2, memory: done (backend only).</b> Facts with confidence scores, promotion of things you ask about, rolling summary, local search, Claude's memory tools, and a memory API for the panel. Tested live with real Claude on 31 Oct 2026.</li>
-    <li>Phase 3, PDFs: next.</li>
+    <li><b>Phase 3, PDFs: done (backend only).</b> Upload, local storage, page text, search chunks, summaries, and Claude's three PDF tools. Tested live with real Claude on 31 Oct 2026: a 15-page paper was searchable in about 20 seconds and fully summarized in about 30.</li>
+    <li>Next: the web side (upload button, document chips, memory panel, streaming with tool status).</li>
   </ul>
 </section>
 
@@ -253,7 +254,7 @@ th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;l
     <tr><th>Tool</th><th>What it does</th></tr>
     <tr><td><code>search_pdfs(query, document?)</code></td><td>Best matching passages from this chat's PDFs, with file name and pages</td></tr>
     <tr><td><code>get_document_summary(document)</code></td><td>The stored summary of a whole PDF</td></tr>
-    <tr><td><code>read_pdf_pages(document, from, to)</code></td><td>Exact text of specific pages, length capped</td></tr>
+    <tr><td><code>read_pdf_pages(document, first_page, last_page)</code></td><td>Exact text of specific pages, length capped</td></tr>
     <tr><td><code>search_history(query)</code></td><td>Older messages from this chat, word for word</td></tr>
     <tr><td><code>search_memory(query)</code></td><td>Known and Archived facts that match</td></tr>
     <tr><td><code>remember_fact(fact)</code></td><td>Pins and locks a fact when you say "remember this"</td></tr>
@@ -268,13 +269,13 @@ th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;l
     <div class="arrow">→</div>
     <div class="step"><small>2</small><b>Extract</b><span>Text page by page</span></div>
     <div class="arrow">→</div>
-    <div class="step"><small>3</small><b>Chunk</b><span>~800 tokens each, overlapping, page numbers kept</span></div>
+    <div class="step"><small>3</small><b>Chunk</b><span>~1,500 characters (~375 tokens) each, overlapping, page numbers kept. The embedding model reads at most 512 tokens, so bigger chunks would be cut off.</span></div>
     <div class="arrow">→</div>
-    <div class="step"><small>4</small><b>Embed</b><span>Local model, stored in MySQL</span></div>
+    <div class="step"><small>4</small><b>Embed</b><span>Local model, stored in MySQL in batches, so the first pages are searchable early</span></div>
     <div class="arrow">→</div>
-    <div class="step"><small>5</small><b>Summarize</b><span>Section summaries, then one whole-PDF summary. Marked "ready".</span></div>
+    <div class="step"><small>5</small><b>Summarize</b><span>Runs alongside steps 3 and 4. Section summaries in parallel, then one whole-PDF summary and a one-line description. Marked "ready".</span></div>
   </div>
-  <p class="muted">Scanned PDFs (just images, no text) won't work yet. They'd need OCR.</p>
+  <p class="muted">Scanned PDFs (just images, no text) won't work yet. They'd need OCR. They fail with a clear message, and so do password-protected PDFs. If the summary fails, the PDF stays searchable. A backend restart picks up PDFs that were still being processed.</p>
 </section>
 
 <section id="db">
@@ -286,7 +287,9 @@ facts(id, content, category, score, locked, origin, use_count, last_used_at,
       source_message_id, embedding blob, created_at, updated_at)
 fact_events(id, fact_id, kind, delta, score_after, message_id, created_at)
 activity_days(day)
-documents(id, conversation_id, filename, stored_path, pages, status, summary, created_at)
+documents(id, conversation_id, filename, stored_name, size_bytes, pages, status, stage, error,
+          one_line, summary, created_at, ready_at)        -- status: processing | ready | failed
+document_pages(id, document_id, number, content)          -- exact page text, for read_pdf_pages
 chunks(id, document_id, page_from, page_to, content, embedding blob)</code></pre>
 </section>
 

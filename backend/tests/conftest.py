@@ -43,6 +43,8 @@ def fake_claude(monkeypatch):
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     from app import create_app
+
+    monkeypatch.setenv("UPLOADS_DIR", str(tmp_path / "uploads"))
     from models import db
 
     application = create_app({
@@ -86,6 +88,10 @@ def fake_bot(monkeypatch):
             self.facts_calls = []
             self.summary = "SUMMARY"
             self.summary_calls = []
+            self.section_calls = []
+            self.document_calls = []
+            self.document_summary = ("A test document.", "It says test things (p. 1).")
+            self.document_error = None
 
         def stream_reply(self, turn):
             self.seen.append(turn)
@@ -102,8 +108,20 @@ def fake_bot(monkeypatch):
             self.summary_calls.append((old_summary, messages))
             return self.summary
 
+        def summarize_section(self, filename, page_from, page_to, text):
+            self.section_calls.append((filename, page_from, page_to, text))
+            return f"notes on pages {page_from}-{page_to}"
+
+        def summarize_document(self, filename, page_count, sections, is_full_text):
+            self.document_calls.append((filename, page_count, sections, is_full_text))
+            if self.document_error:
+                raise bot.LLMError(self.document_error)
+            return self.document_summary
+
     fake = FakeBot()
     monkeypatch.setattr(bot, "stream_reply", fake.stream_reply)
     monkeypatch.setattr(bot, "extract_facts", fake.extract_facts)
     monkeypatch.setattr(bot, "summarize", fake.summarize)
+    monkeypatch.setattr(bot, "summarize_section", fake.summarize_section)
+    monkeypatch.setattr(bot, "summarize_document", fake.summarize_document)
     return fake

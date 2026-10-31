@@ -14,8 +14,9 @@ from urllib.parse import urlencode
 
 from flask import Blueprint, abort, current_app, jsonify, request
 
+import documents
 import memory
-from models import Conversation, Fact, db
+from models import Conversation, Document, Fact, db
 
 log = logging.getLogger("chatbot.mcp")
 
@@ -68,6 +69,51 @@ TOOLS = [
     },
 ]
 
+_DOCUMENT_ARG = {
+    "type": "string",
+    "description": "Which PDF: its id like d3, or its file name.",
+}
+
+TOOLS += [
+    {
+        "name": "search_pdfs",
+        "description": (
+            "Search the PDFs uploaded to this conversation by meaning and words. Returns the best matching "
+            "passages word for word, with the file name and page numbers."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to look for: a question or a few key words."},
+                "document": {**_DOCUMENT_ARG, "description": "Optional: search only this PDF (id like d3, or file name)."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_document_summary",
+        "description": "The summary of a whole uploaded PDF.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"document": _DOCUMENT_ARG},
+            "required": ["document"],
+        },
+    },
+    {
+        "name": "read_pdf_pages",
+        "description": "The exact text of a range of pages of an uploaded PDF (about 30,000 characters at most).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "document": _DOCUMENT_ARG,
+                "first_page": {"type": "integer", "description": "First page to read, counting from 1."},
+                "last_page": {"type": "integer", "description": "Last page to read. Defaults to first_page."},
+            },
+            "required": ["document", "first_page"],
+        },
+    },
+]
+
 ALLOWED_TOOLS = [f"mcp__{SERVER}__{t['name']}" for t in TOOLS]
 
 LABELS = {
@@ -75,6 +121,9 @@ LABELS = {
     "search_memory": "Checking what I remember…",
     "remember_fact": "Saving to memory…",
     "forget_fact": "Removing from memory…",
+    "search_pdfs": "Searching your PDFs…",
+    "get_document_summary": "Reading the PDF summary…",
+    "read_pdf_pages": "Reading PDF pages…",
 }
 
 
@@ -159,6 +208,9 @@ def _call(name, args):
         "search_memory": _search_memory,
         "remember_fact": _remember_fact,
         "forget_fact": _forget_fact,
+        "search_pdfs": _search_pdfs,
+        "get_document_summary": _get_document_summary,
+        "read_pdf_pages": _read_pdf_pages,
     }
     handler = handlers.get(name)
     if handler is None:
@@ -225,3 +277,91 @@ def _forget_fact(args, conversation_id, turn, before):
     memory.log_tool_call(conversation_id, turn, "forget_fact", args)
     log.info("Forgot fact %s: %s", args["fact_id"], content)
     return _text(f"Forgot: {content}")
+
+
+# --- PDFs --------------------------------------------------------------------
+
+
+def _pages_label(first, last):
+    return f"p. {first}" if first == last else f"pp. {first}-{last}"
+
+
+def _no_such_document(conversation_id, reference):
+    docs = db.session.query(Document).filter_by(conversation_id=conversation_id).order_by(Document.id).all()
+    if not docs:
+        return _text("No PDFs have been uploaded to this conversation.", is_error=True)
+    listed = ", ".join(f"{d.ref} {d.filename}" for d in docs)
+    return _text(f"No PDF matches {reference!r}. This chat has: {listed}.", is_error=True)
+
+
+def _document_arg(args, conversation_id):
+    """(document, None) or (None, error result)."""
+    reference = args["document"]
+    document = documents.find(conversation_id, reference)
+    if document is None:
+        return None, _no_such_document(conversation_id, reference)
+    if document.status == "failed":
+        return None, _text(f"{document.filename} couldn't be read: {document.error}", is_error=True)
+    return document, None
+
+
+def _search_pdfs(args, conversation_id, turn, before):
+    query = str(args["query"]).strip()
+    if not query:
+        return _text("Give a query to search for.", is_error=True)
+    only = None
+    if args.get("document"):
+        only, error = _document_arg(args, conversation_id)
+        if error:
+            return error
+    found = documents.search(conversation_id, query, document_id=only.id if only else None)
+    memory.log_tool_call(conversation_id, turn, "search_pdfs", args)
+    log.info("search_pdfs %r%s: %d passages", query, f" in {only.ref}" if only else "", len(found))
+    if not found:
+        processing = db.session.query(Document).filter_by(conversation_id=conversation_id, status="processing").count()
+        if processing:
+            return _text("Nothing found. Some PDFs are still being read, so try again in a moment.")
+        return _text("No passages in the uploaded PDFs match that.")
+    blocks = [
+        f"[{doc.ref} · {doc.filename} · {_pages_label(chunk.page_from, chunk.page_to)}]\n{chunk.content}"
+        for chunk, doc, _ in found
+    ]
+    return _text(f"{len(found)} matching passages, best first:\n\n" + "\n\n".join(blocks))
+
+
+def _get_document_summary(args, conversation_id, turn, before):
+    document, error = _document_arg(args, conversation_id)
+    if error:
+        return error
+    memory.log_tool_call(conversation_id, turn, "get_document_summary", args)
+    log.info("get_document_summary %s", document.ref)
+    if not document.summary:
+        if document.status == "processing":
+            return _text(f"The summary of {document.filename} is still being written. "
+                         "Use search_pdfs or read_pdf_pages meanwhile.")
+        return _text(f"{document.filename} has no summary. Use search_pdfs or read_pdf_pages instead.")
+    return _text(f"Summary of {document.filename} ({document.pages} pages):\n\n{document.summary}")
+
+
+def _read_pdf_pages(args, conversation_id, turn, before):
+    document, error = _document_arg(args, conversation_id)
+    if error:
+        return error
+    if not document.pages:
+        return _text(f"{document.filename} is still being read. Try again in a moment.")
+    first = int(args["first_page"])
+    last = int(args.get("last_page") or first)
+    if first > last:
+        first, last = last, first
+    if first < 1 or first > document.pages:
+        return _text(f"{document.filename} has pages 1 to {document.pages}.", is_error=True)
+    last = min(last, document.pages)
+    pages, cut = documents.read_pages(document, first, last)
+    memory.log_tool_call(conversation_id, turn, "read_pdf_pages", args)
+    log.info("read_pdf_pages %s %s", document.ref, _pages_label(first, last))
+    blocks = [f"[page {number}]\n{text or '(no text on this page)'}" for number, text in pages]
+    note = ""
+    if cut:
+        note = (f"\n\n[Cut off at about 30,000 characters, in page {pages[-1][0]}. "
+                f"Read from page {pages[-1][0]} to continue.]")
+    return _text(f"{document.filename}, {_pages_label(first, last)}:\n\n" + "\n\n".join(blocks) + note)

@@ -74,7 +74,9 @@ def embed_documents(texts):
         return np.zeros((0, DIMENSIONS), dtype=np.float32)
     if _backend() == "fake":
         return _fake(texts)
-    return _normalise(list(_load().embed([t[:4000] for t in texts])))
+    # One text at a time: on this 2-core machine that is about twice as fast as
+    # batching, because batches pad every text to the longest one.
+    return _normalise(list(_load().embed([t[:4000] for t in texts], batch_size=1)))
 
 
 def embed_query(text):

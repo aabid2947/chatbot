@@ -42,6 +42,10 @@ class Conversation(db.Model):
         order_by="Message.id",
     )
     tool_calls = db.relationship("ToolCall", cascade="all, delete-orphan", passive_deletes=True)
+    documents = db.relationship(
+        "Document", back_populates="conversation", cascade="all, delete-orphan", passive_deletes=True,
+        order_by="Document.id",
+    )
 
     def to_dict(self):
         return {
@@ -164,3 +168,88 @@ class ToolCall(db.Model):
     found_message_ids = db.Column(db.Text, nullable=False, default="[]")  # JSON list
     found_fact_ids = db.Column(db.Text, nullable=False, default="[]")  # JSON list
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
+class Document(db.Model):
+    """An uploaded PDF. The file itself lives on disk (documents.py).
+
+    status: processing -> ready, or failed (with `error`). While processing,
+    `stage` says how far it got: reading | indexing | summarizing. A document
+    is searchable as soon as its chunks exist, even while its summary is
+    still being written.
+    """
+
+    __tablename__ = "documents"
+
+    id = db.Column(db.Integer, primary_key=True)
+    conversation_id = db.Column(
+        db.CHAR(36), db.ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    filename = db.Column(db.String(255), nullable=False)
+    stored_name = db.Column(db.String(64), nullable=False)  # file name inside the uploads folder
+    size_bytes = db.Column(db.Integer, nullable=False)
+    pages = db.Column(db.Integer, nullable=True)
+    status = db.Column(db.String(16), nullable=False, default="processing")
+    stage = db.Column(db.String(16), nullable=True)
+    error = db.Column(db.Text, nullable=True)
+    one_line = db.Column(db.String(400), nullable=True)
+    summary = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    ready_at = db.Column(db.DateTime, nullable=True)
+
+    conversation = db.relationship("Conversation", back_populates="documents")
+    page_texts = db.relationship(
+        "DocumentPage", cascade="all, delete-orphan", passive_deletes=True, order_by="DocumentPage.number"
+    )
+    chunks = db.relationship("Chunk", cascade="all, delete-orphan", passive_deletes=True, order_by="Chunk.id")
+
+    @property
+    def ref(self):
+        """How the prompt and tools name it, like [d3]."""
+        return f"d{self.id}"
+
+    def to_dict(self, with_summary=False):
+        data = {
+            "id": self.id,
+            "conversation_id": self.conversation_id,
+            "filename": self.filename,
+            "size_bytes": self.size_bytes,
+            "pages": self.pages,
+            "status": self.status,
+            "stage": self.stage,
+            "error": self.error,
+            "one_line": self.one_line,
+            "created_at": iso(self.created_at),
+            "ready_at": iso(self.ready_at),
+        }
+        if with_summary:
+            data["summary"] = self.summary
+        return data
+
+
+class DocumentPage(db.Model):
+    """The text of one PDF page, for read_pdf_pages."""
+
+    __tablename__ = "document_pages"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(
+        db.Integer, db.ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    number = db.Column(db.Integer, nullable=False)  # 1-based
+    content = db.Column(db.Text(16_000_000), nullable=False)
+
+
+class Chunk(db.Model):
+    """A searchable passage of a PDF (about 1,500 characters) with its pages."""
+
+    __tablename__ = "chunks"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(
+        db.Integer, db.ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    page_from = db.Column(db.Integer, nullable=False)
+    page_to = db.Column(db.Integer, nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    embedding = db.Column(db.LargeBinary, nullable=True)

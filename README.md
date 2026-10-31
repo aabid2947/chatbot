@@ -59,7 +59,7 @@ Stream events, in order:
 | event | data |
 |---|---|
 | `user_message` | the saved user message |
-| `tool` | `{ "name", "label" }` when Claude starts looking something up, e.g. "Searching earlier messages…" |
+| `tool` | `{ "name", "label" }` when Claude starts looking something up, e.g. "Searching your PDFs…" |
 | `delta` | `{ "text": "..." }`, repeated as Claude writes |
 | `done` | `{ "reply", "conversation" }` once the reply is saved |
 | `error` | `{ "error": "..." }` instead of `done`; no reply is saved |
@@ -76,17 +76,36 @@ Memory (facts about the user, shared by every chat):
 | PATCH | /api/memory/facts/:id | `{ "content" }` reword, `{ "locked": true/false }` lock or unlock |
 | DELETE | /api/memory/facts/:id | forget it |
 
+PDFs (each belongs to one chat):
+
+| Method | Path | |
+|---|---|---|
+| POST | /api/conversations/:id/documents | multipart upload, field `file`. Answers at once with the document in `processing`; 400 if it isn't a PDF, 413 if over `UPLOAD_MAX_MB` |
+| GET | /api/conversations/:id/documents | the chat's PDFs with `status`, `stage`, `pages`, `one_line`, `error` |
+| GET | /api/documents/:id | one PDF, plus its `summary` |
+| GET | /api/documents/:id/file | the PDF itself |
+| POST | /api/documents/:id/retry | try a failed PDF again (409 if it didn't fail) |
+| DELETE | /api/documents/:id | delete the PDF, its file and its search index |
+
+`status` goes `processing` → `ready`, or `failed` with a readable `error` (scanned or password-protected PDFs, broken files).
+While processing, `stage` is `reading`, `indexing` (searchable page by page) or `summarizing` (fully searchable).
+Poll the list every second or two to update a chip. Deleting a chat deletes its PDFs too.
+
 `POST /api/mcp` is the tool server Claude itself calls during a reply. It only answers this machine, with a per-start secret.
 
 ## The bot
 
 The model is **local Claude Code**, one fresh `claude -p` process per call, so every call is stateless.
-The backend sends what's needed with each call: pinned facts, the chat's rolling summary, and the recent
-messages word for word. Claude fetches anything else with tools.
+The backend sends what's needed with each call: pinned facts, the chat's rolling summary, a list of the
+chat's PDFs, and the recent messages word for word. Claude fetches anything else with tools.
 
 - `backend/llm.py` starts Claude with built-in tools, skills, other MCP servers and the owner's settings switched off, and streams its reply. Never add `--safe-mode`: it also blocks our tool server.
 - `backend/prompt.py` builds every prompt (chat, fact extraction, summary, title).
-- `backend/mcp.py` is the tool server: `search_history`, `search_memory`, `remember_fact`, `forget_fact`.
+- `backend/mcp.py` is the tool server: `search_history`, `search_memory`, `remember_fact`, `forget_fact`,
+  `search_pdfs`, `get_document_summary`, `read_pdf_pages`.
+- `backend/documents.py` handles PDFs: saves the file to `storage/uploads/`, reads each page (pypdf), cuts the
+  text into ~1,500-character overlapping chunks with page numbers, embeds them, and summarizes the whole PDF
+  (sections in parallel, then one summary). All in the background; the upload answers at once.
 - `backend/memory.py` holds facts, confidence scores and search. `backend/embeddings.py` makes search vectors locally (bge-small, ~65 MB, downloaded once into `backend/.models`).
 - `backend/jobs.py` runs after each reply in the background: embeds the new messages, asks Claude (haiku) what to remember and applies it, and folds old messages into the summary.
 - `backend/bot.py` is what routes and jobs call.

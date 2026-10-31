@@ -44,7 +44,8 @@ def test_handshake_and_tool_list(app, client, chat):
     assert init["result"]["capabilities"] == {"tools": {}}
     assert client.post(url, json={"jsonrpc": "2.0", "method": "notifications/initialized"}).status_code == 202
     tools = rpc(client, url, "tools/list").get_json()["result"]["tools"]
-    assert [t["name"] for t in tools] == ["search_history", "search_memory", "remember_fact", "forget_fact"]
+    assert [t["name"] for t in tools] == ["search_history", "search_memory", "remember_fact", "forget_fact",
+                                          "search_pdfs", "get_document_summary", "read_pdf_pages"]
     unknown = rpc(client, url, "server/discover").get_json()
     assert unknown["error"]["code"] == -32601
 
@@ -120,7 +121,9 @@ def test_each_reply_gets_tools_scoped_to_its_chat_and_turn(app, client, fake_bot
     client.post(f"/api/conversations/{chat['id']}/messages", json={"content": "hello"})
     tools = fake_bot.seen[-1].tools
     assert tools["allowed"] == ["mcp__memory__search_history", "mcp__memory__search_memory",
-                                "mcp__memory__remember_fact", "mcp__memory__forget_fact"]
+                                "mcp__memory__remember_fact", "mcp__memory__forget_fact",
+                                "mcp__memory__search_pdfs", "mcp__memory__get_document_summary",
+                                "mcp__memory__read_pdf_pages"]
     url = urlparse(tools["mcp_config"]["mcpServers"]["memory"]["url"])
     assert f"{url.scheme}://{url.netloc}{url.path}" == "http://127.0.0.1:5999/api/mcp"
     query = {k: v[0] for k, v in parse_qs(url.query).items()}

@@ -8,13 +8,18 @@ import re
 
 import llm
 from prompt import (
+    DOCUMENT_SUMMARY_SCHEMA,
+    DOCUMENT_SUMMARY_SYSTEM_PROMPT,
     FACTS_SCHEMA,
     FACTS_SYSTEM_PROMPT,
+    SECTION_SYSTEM_PROMPT,
     SUMMARY_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     TITLE_SYSTEM_PROMPT,
     build_chat_prompt,
+    build_document_summary_prompt,
     build_facts_prompt,
+    build_section_prompt,
     build_summary_prompt,
     build_title_prompt,
 )
@@ -83,3 +88,30 @@ def summarize(old_summary, messages):
         effort="low",
         label="summary",
     ).strip()
+
+
+def summarize_section(filename, page_from, page_to, text):
+    """Notes on one part of a PDF (the map step of a document summary)."""
+    return llm.complete(
+        build_section_prompt(filename, page_from, page_to, text),
+        SECTION_SYSTEM_PROMPT,
+        model=llm.background_model(),
+        effort="low",
+        label=f"pdf pages {page_from}-{page_to}",
+    ).strip()
+
+
+def summarize_document(filename, page_count, sections, is_full_text):
+    """(one_line, summary) of a PDF, from its full text or its section notes."""
+    data = llm.structured(
+        build_document_summary_prompt(filename, page_count, sections, is_full_text),
+        DOCUMENT_SUMMARY_SYSTEM_PROMPT,
+        DOCUMENT_SUMMARY_SCHEMA,
+        model=llm.background_model(),
+        label="pdf summary",
+    )
+    one_line = (data.get("one_line") or "").strip()[:400] or None
+    summary = (data.get("summary") or "").strip() or None
+    if summary is None:
+        raise LLMError("Claude returned an empty document summary.")
+    return one_line, summary

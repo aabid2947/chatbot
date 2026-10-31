@@ -26,7 +26,10 @@ stateless print mode.
 - **Phase 2 (memory): done, backend only.** Facts with confidence scores, promotion of dug-up details,
   rolling summary, local embeddings, the tool server (search_history, search_memory, remember_fact,
   forget_fact), memory API. 75 tests. Live-tested with real Claude on 2026-10-31.
-- Phase 3 (PDFs): next.
+- **Phase 3 (PDFs): done, backend only.** Upload, local storage, page text, search chunks, map-reduce
+  summaries, PDF tools (search_pdfs, get_document_summary, read_pdf_pages). 96 tests. Live-tested with
+  real Claude on 2026-10-31: a 15-page paper was searchable in ~20 s and fully summarized in ~30 s.
+- Next: the web side.
 
 ## The LLM adapter (`backend/llm.py`)
 
@@ -152,7 +155,7 @@ why a score moved ("used 4 times, last today").
 |---|---|
 | `search_pdfs(query, document?)` | Top matching passages from this chat's PDFs, with file name and page numbers |
 | `get_document_summary(document)` | The stored summary of a whole PDF |
-| `read_pdf_pages(document, from, to)` | Exact text of specific pages (capped length) |
+| `read_pdf_pages(document, first_page, last_page)` | Exact text of specific pages (capped length) |
 | `search_history(query)` | Older messages from this chat that match, word for word |
 | `search_memory(query)` | Known and Archived facts that match (pinned ones are already in the prompt) |
 | `remember_fact(fact)` | Lets Claude pin a fact when the user says "remember this" |
@@ -172,14 +175,20 @@ secret, and the endpoint only listens on 127.0.0.1.
 
 ## PDF pipeline
 
-1. Upload → save to `storage/uploads/`, create a `documents` row (status `processing`).
-2. Extract text page by page.
-3. Chunk to ~800 tokens with overlap, keeping page ranges.
-4. Embed each chunk, store in `chunks`.
-5. Summarize the whole document (map-reduce: section summaries → one summary).
-6. Status `ready`. The UI chip turns from "processing" to "ready".
+1. Upload → save to `storage/uploads/<random>.pdf`, create a `documents` row (status `processing`).
+2. Extract text page by page; store each page's text in `document_pages`.
+3. Chunk to ~1,500 characters (~375 tokens) with ~200 characters of overlap, keeping page ranges.
+   (Changed from ~800 tokens: the embedding model only reads 512 tokens, so bigger chunks get cut off.)
+4. Embed the chunks one at a time (twice as fast as batching on this 2-core machine) and save them in
+   batches of 24, so the first pages are searchable while the rest are indexed.
+5. At the same time, summarize: sections of ~20,000 characters in parallel (haiku), then one summary
+   plus a one-line description. Short PDFs are summarized from the full text in one call.
+6. Status `ready`. The UI chip turns from "processing" to "ready" (`stage` says reading / indexing /
+   summarizing meanwhile).
 
-Scanned PDFs (images, no text layer) are out of scope for now. They would need OCR.
+Scanned PDFs (images, no text layer) are out of scope for now. They would need OCR. They fail with a
+clear message, as do password-protected PDFs. A failed summary leaves the PDF searchable. A backend
+restart resumes PDFs that were still processing.
 
 ## Database (`chatbot` on MySQL, 127.0.0.1:3306)
 
@@ -191,7 +200,9 @@ facts(id, content, category, score real, locked bool, origin,             -- glo
       created_at, updated_at)
 fact_events(id, fact_id, kind, delta, score_after, message_id, created_at) -- kind: created | used | promoted | edited | locked | unlocked
 activity_days(day date primary key)                                        -- days the user chatted; drives decay
-documents(id, conversation_id, filename, stored_path, pages, status, summary, created_at)
+documents(id, conversation_id, filename, stored_name, size_bytes, pages, status, stage, error,
+          one_line, summary, created_at, ready_at)     -- status: processing | ready | failed
+document_pages(id, document_id, number, content)       -- exact page text, for read_pdf_pages
 chunks(id, document_id, page_from, page_to, content, embedding blob)
 ```
 

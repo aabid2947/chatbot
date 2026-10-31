@@ -4,19 +4,20 @@ import os
 import threading
 
 from dotenv import load_dotenv
-from flask import Flask, Response, abort, current_app, jsonify, request, stream_with_context
-from sqlalchemy import text
+from flask import Flask, Response, abort, current_app, jsonify, request, send_file, stream_with_context
+from sqlalchemy import event, text
 
 load_dotenv()
 
 import bot  # noqa: E402  (reads settings from the environment loaded above)
+import documents  # noqa: E402
 import embeddings  # noqa: E402
 import jobs  # noqa: E402
 import mcp  # noqa: E402
 import memory  # noqa: E402
 import memory_routes  # noqa: E402
 import schema  # noqa: E402
-from models import Conversation, Message, db, utcnow  # noqa: E402
+from models import Conversation, Document, Message, db, utcnow  # noqa: E402
 from prompt import Turn, recent_limit  # noqa: E402
 
 log = logging.getLogger("chatbot.app")
@@ -44,11 +45,15 @@ def create_app(config=None):
     # Where Claude reaches our tool server: this backend, on this machine.
     app.config["SELF_URL"] = os.getenv("SELF_URL") or f"http://127.0.0.1:{os.getenv('PORT', '5000')}"
     app.config["MCP_SECRET"] = mcp.new_secret()
+    app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("UPLOAD_MAX_MB", "50")) * 1024 * 1024
     if config:
         app.config.update(config)
     db.init_app(app)
 
     with app.app_context():
+        if db.engine.dialect.name == "sqlite":
+            # Tests use SQLite. Make it honour ON DELETE CASCADE like MySQL does.
+            event.listen(db.engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
         schema.upgrade(db.engine)
         db.create_all()
 
@@ -110,7 +115,23 @@ def build_turn(convo, messages):
         summary=convo.summary if upto else None,
         facts=[(f.id, f.content) for f in memory.pinned_facts()],
         tools=tools,
+        documents=[document_for_prompt(d) for d in convo.documents],
     )
+
+
+def document_for_prompt(document):
+    state = document.status
+    if state == "processing" and document.stage in ("indexing", "summarizing"):
+        state = document.stage
+    return {"ref": document.ref, "filename": document.filename, "pages": document.pages, "state": state,
+            "error": document.error, "one_line": document.one_line}
+
+
+def get_document(document_id):
+    document = db.session.get(Document, document_id)
+    if document is None:
+        abort(404, description="Document not found")
+    return document
 
 
 def save_reply(convo, content):
@@ -169,6 +190,8 @@ def register_routes(app):
     @app.errorhandler(400)
     @app.errorhandler(403)
     @app.errorhandler(404)
+    @app.errorhandler(409)
+    @app.errorhandler(413)
     @app.errorhandler(502)
     def json_error(err):
         return jsonify(error=err.description), err.code
@@ -214,9 +237,73 @@ def register_routes(app):
 
     @app.delete("/api/conversations/<conversation_id>")
     def delete_conversation(conversation_id):
-        db.session.delete(get_conversation(conversation_id))
+        convo = get_conversation(conversation_id)
+        files = [d.stored_name for d in convo.documents]
+        db.session.delete(convo)
         db.session.commit()
+        documents.remove_files(files)
         log.info("Deleted chat %s", conversation_id)
+        return "", 204
+
+    # --- PDFs ----------------------------------------------------------------
+
+    @app.post("/api/conversations/<conversation_id>/documents")
+    def upload_document(conversation_id):
+        """Multipart upload, field `file`. Answers straight away with the
+        document in `processing`; reading it happens in the background."""
+        convo = get_conversation(conversation_id)
+        upload = request.files.get("file")
+        if upload is None:
+            abort(400, description="Send the PDF as a multipart form field named 'file'")
+        data = upload.read()
+        if not data:
+            abort(400, description="The file is empty")
+        if not documents.looks_like_pdf(data):
+            abort(400, description="Only PDF files can be uploaded")
+        document = documents.save_upload(convo, upload.filename, data)
+        convo.updated_at = utcnow()
+        db.session.commit()
+        log.info("Chat %s: uploaded %s as document %d (%d KB)", convo.id, document.filename, document.id,
+                 len(data) // 1024)
+        documents.start_processing(current_app._get_current_object(), document.id)
+        db.session.refresh(document)
+        return jsonify(document.to_dict()), 201
+
+    @app.get("/api/conversations/<conversation_id>/documents")
+    def list_documents(conversation_id):
+        return jsonify([d.to_dict() for d in get_conversation(conversation_id).documents])
+
+    @app.get("/api/documents/<int:document_id>")
+    def get_document_details(document_id):
+        return jsonify(get_document(document_id).to_dict(with_summary=True))
+
+    @app.get("/api/documents/<int:document_id>/file")
+    def get_document_file(document_id):
+        document = get_document(document_id)
+        path = documents.file_path(document)
+        if not path.exists():
+            abort(404, description="The file is missing from storage")
+        return send_file(path, mimetype="application/pdf", download_name=document.filename)
+
+    @app.post("/api/documents/<int:document_id>/retry")
+    def retry_document(document_id):
+        document = get_document(document_id)
+        if document.status != "failed":
+            abort(409, description="Only a failed document can be retried")
+        document.status, document.stage, document.error = "processing", "reading", None
+        db.session.commit()
+        documents.start_processing(current_app._get_current_object(), document.id)
+        db.session.refresh(document)
+        return jsonify(document.to_dict())
+
+    @app.delete("/api/documents/<int:document_id>")
+    def delete_document(document_id):
+        document = get_document(document_id)
+        stored_name = document.stored_name
+        db.session.delete(document)
+        db.session.commit()
+        documents.remove_files([stored_name])
+        log.info("Deleted document %d", document_id)
         return "", 204
 
     @app.get("/api/conversations/<conversation_id>/messages")
@@ -303,4 +390,8 @@ def register_routes(app):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     app = create_app()
+    # With the debug reloader this file runs twice: a watcher process and the
+    # real server. Only the real server picks up interrupted PDFs.
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        documents.resume_unfinished(app)
     app.run(host="127.0.0.1", port=int(os.getenv("PORT", "5000")), debug=True, threaded=True)

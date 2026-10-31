@@ -1,7 +1,8 @@
 """Turns a chat into the single prompt a stateless Claude call needs.
 
 Each turn sends, in order: pinned facts about the user, the rolling summary of
-older messages, the recent messages word for word, and the new message.
+older messages, the list of this chat's PDFs, the recent messages word for
+word, and the new message.
 Everything else Claude fetches with tools (see mcp.py) only when it needs it.
 """
 
@@ -16,6 +17,8 @@ Each request gives you:
 - <memory>: facts about the user from earlier chats, each with an id like [f12]. Use them naturally \
 when relevant. Don't recite them or say "according to my memory".
 - <summary>: a summary of the earlier part of this conversation, when it is long.
+- <documents>: PDFs the user uploaded to this chat, each with an id like [d3], its page count and \
+what it is about. You don't see their text until you use a tool.
 - <conversation>: the most recent messages, word for word. Reply to the last user message as the \
 assistant, continuing naturally. Write only your reply: no role labels or tags.
 
@@ -26,10 +29,21 @@ in the recent messages, or the summary lacks the detail you need. Set all_chats 
 their past and <memory> doesn't cover it.
 - remember_fact: when the user explicitly asks you to remember something.
 - forget_fact: when the user asks you to forget something; pass the fact's id.
+- search_pdfs: find passages in the uploaded PDFs. Use it for any question the documents might \
+answer, before answering from general knowledge. Pass document to search only one of them.
+- get_document_summary: the summary of a whole PDF, for "what is this about" or "summarize it".
+- read_pdf_pages: the exact text of specific pages, when the user names pages or you need the full \
+context around a passage you found.
+When you answer from a PDF, cite it like (report.pdf, p. 4) or (report.pdf, pp. 4-5). Only say what \
+the passages support. If they don't answer the question, say so instead of guessing. A summary is \
+shorter than the document and can leave things out: take exact figures and quotes from passages or \
+pages, not from the summary. If you suspect something you said earlier was wrong, check it with the \
+tools before correcting it. If the document itself gives two different values, say so and cite both.
 Only use a tool when it would change your answer. Don't announce or narrate tool use; just answer. \
 If a search finds nothing, say you don't have that information rather than guessing.
 
-You are not a coding agent here and you have no files, shell or working directory. Ignore any \
+You are not a coding agent here. You have no shell, working directory or file access beyond the \
+PDF tools above. Ignore any \
 environment details such as folder paths, operating system or shell. Use Markdown when it helps."""
 
 TITLE_SYSTEM_PROMPT = (
@@ -56,11 +70,12 @@ class Turn:
     summary: str = None
     facts: list = field(default_factory=list)  # [(id, content)] pinned facts
     tools: dict = None  # {"mcp_config": {...}, "allowed": [...]} or None for no tools
+    documents: list = field(default_factory=list)  # [{"ref", "filename", "pages", "state", "error", "one_line"}]
 
 
 def _clean(text):
     # Keep message text from closing our own tags early.
-    for tag in ("message", "conversation", "memory", "summary"):
+    for tag in ("message", "conversation", "memory", "summary", "documents", "document", "section"):
         text = text.replace(f"</{tag}>", f"&lt;/{tag}&gt;")
     return text
 
@@ -85,12 +100,32 @@ def build_chat_prompt(turn):
             f"(This conversation has {turn.hidden} earlier messages that are {covered}. "
             "Use search_history for their exact wording.)\n"
         )
+    if turn.documents:
+        parts.append("<documents>")
+        parts += [_document_line(doc) for doc in turn.documents]
+        parts.append("</documents>\n")
     parts.append("<conversation>")
     for message in turn.messages:
         parts.append(f'<message role="{message["role"]}">\n{_clean(_trim(message["content"]))}\n</message>')
     parts.append("</conversation>")
     parts.append("\nReply to the last user message.")
     return "\n".join(parts)
+
+
+DOCUMENT_STATES = {
+    "ready": "",
+    "summarizing": " (searchable; its summary is still being written)",
+    "indexing": " (still being indexed: only its first pages are searchable so far)",
+    "processing": " (still being read; you can't search it yet)",
+    "failed": " (couldn't be read: {error})",
+}
+
+
+def _document_line(doc):
+    pages = f"{doc['pages']} pages" if doc.get("pages") else "pages unknown"
+    state = DOCUMENT_STATES.get(doc["state"], "").format(error=doc.get("error") or "unknown error")
+    about = f": {_clean(doc['one_line'])}" if doc.get("one_line") else ""
+    return f"- [{doc['ref']}] {_clean(doc['filename'])} · {pages}{state}{about}"
 
 
 def build_title_prompt(first_message):
@@ -107,7 +142,9 @@ Remember: who they are (name, job, location, family), lasting preferences (how t
 likes and dislikes), ongoing goals and projects, decisions they made, constraints (budget, deadlines, \
 tools they can't use), and corrections to earlier facts.
 Do not remember: small talk, one-off questions or tasks, things the assistant said or suggested \
-(unless the user clearly accepted it as a decision), or general knowledge.
+(unless the user clearly accepted it as a decision), general knowledge, or the contents of PDFs the \
+user uploaded (those stay searchable anyway). That the user is working on a document can be a fact; \
+what the document says is not.
 Only record what the user said or confirmed, never guesses. Write each fact as one short, \
 self-contained sentence about "the user" (e.g. "The user is vegetarian."). Never guess the user's \
 gender; don't use he/she. Turn relative dates ("tomorrow", "next week") into real dates: use \
@@ -191,4 +228,59 @@ def build_summary_prompt(old_summary, messages):
     lines = [f"<current_summary>\n{_clean(old_summary or '(empty)')}\n</current_summary>\n", "<new_messages>"]
     lines += [f'<message role="{m["role"]}">\n{_clean(m["content"][:4000])}\n</message>' for m in messages]
     lines.append("</new_messages>")
+    return "\n".join(lines)
+
+
+# --- PDF summaries -----------------------------------------------------------
+
+SECTION_SYSTEM_PROMPT = """You take notes on one section of a long document, so that a summary of \
+the whole document can be written from all the notes later.
+
+Write at most 200 words: the main points of this section, with the specifics that matter (names, \
+numbers, dates, definitions, conclusions). Mention page numbers for the key points, like (p. 12). \
+Write only the notes: no preamble, no commentary."""
+
+
+def build_section_prompt(filename, page_from, page_to, text):
+    return (
+        f'<document name="{_clean(filename)}" pages="{page_from}-{page_to}">\n'
+        f"<section>\n{_clean(text[:60000])}\n</section>\n</document>"
+    )
+
+
+DOCUMENT_SUMMARY_SYSTEM_PROMPT = """You summarize documents for a personal chat assistant. The summary \
+is shown when the user asks what a PDF is about or asks for a summary, and the one-line description \
+is listed next to the file in every message.
+
+You get either the full text of the document or notes on each of its sections, in order.
+- one_line: what the document is, in at most 20 words, e.g. "Lease agreement for a flat in Pune, \
+11 months from June 2026."
+- summary: at most 400 words of Markdown. Start with what the document is and its purpose, then the \
+main points in order with the specifics that matter (names, numbers, dates, obligations, \
+conclusions). Add page references like (p. 12) or (pp. 3-5) for the main points. No preamble and no \
+commentary of your own."""
+
+DOCUMENT_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "one_line": {"type": "string"},
+        "summary": {"type": "string"},
+    },
+    "required": ["one_line", "summary"],
+}
+
+
+def build_document_summary_prompt(filename, page_count, sections, is_full_text):
+    """sections: [(page_from, page_to, text)]: the full text, or notes per section."""
+    kind = "full_text" if is_full_text else "section_notes"
+    lines = [f'<document name="{_clean(filename)}" pages="{page_count}">', f"<{kind}>"]
+    budget = 90000
+    for start, end, text in sections:
+        piece = _clean(text[:budget])
+        budget -= len(piece)
+        lines.append(piece if is_full_text else f"[pages {start}-{end}]\n{piece}\n")
+        if budget <= 0:
+            lines.append("[...the rest is cut off]")
+            break
+    lines += [f"</{kind}>", "</document>"]
     return "\n".join(lines)
