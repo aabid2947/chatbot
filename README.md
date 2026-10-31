@@ -53,6 +53,7 @@ Conversation ids are UUID strings. Every message is saved with its conversation 
 | POST | /api/conversations/:id/messages | `{ "content": "..." }` → saves it, returns the whole reply. 502 if Claude fails (the user message stays saved) |
 | POST | /api/conversations/:id/messages/stream | same, streamed as Server-Sent Events (below) |
 | POST | /api/conversations/:id/regenerate | replace the last reply; the old one stays if Claude fails |
+| POST | /api/conversations/:id/regenerate/stream | same, streamed (events below, without `user_message`). If the chat ends in a message whose reply failed, it answers that message |
 
 Stream events, in order:
 
@@ -92,6 +93,19 @@ While processing, `stage` is `reading`, `indexing` (searchable page by page) or 
 Poll the list every second or two to update a chip. Deleting a chat deletes its PDFs too.
 
 `POST /api/mcp` is the tool server Claude itself calls during a reply. It only answers this machine, with a per-start secret.
+
+## The web app
+
+- Replies stream in as they're written. While Claude looks something up, a pill says what it's doing
+  ("Searching your PDFs…", "Searching earlier messages…").
+- **PDFs**: the + in the message box, or drag a PDF onto the chat. Each PDF gets a chip above the message box
+  that goes Uploading → Reading → Indexing → Summarizing → "15 pages". Click a chip for its summary, to open
+  the file, retry a failed one or remove it. Page citations in replies, like "attention.pdf, p. 8", are links
+  that open the PDF at that page.
+- **Memory** (sidebar, bottom): every fact grouped Pinned / Known / Archived with a confidence bar. Click a
+  fact to see its history, edit it, lock it or forget it. Add facts by hand at the top.
+- If a reply fails after your message was saved, Retry (or "Get a reply" when you come back later) answers
+  it without sending the message twice.
 
 ## The bot
 

@@ -167,3 +167,40 @@ def test_title_job_replaces_the_placeholder_but_not_a_users_rename(app, client, 
         if t.name == f"title-{other['id']}":
             t.join(5)
     assert client.get(f"/api/conversations/{other['id']}").get_json()["conversation"]["title"] == "Mine"
+
+
+def test_streamed_retry_answers_a_message_whose_reply_failed(client, fake_bot):
+    chat = new_chat(client)
+    fake_bot.error = "Claude failed"
+    client.post(f"/api/conversations/{chat['id']}/messages/stream", json={"content": "Best fort?"}).get_data()
+    fake_bot.error = None
+    fake_bot.reply = ["Amber ", "Fort"]
+    res = client.post(f"/api/conversations/{chat['id']}/regenerate/stream")
+    events = sse_events(res.get_data(as_text=True))
+    assert [e[0] for e in events] == ["delta", "delta", "done"]
+    assert fake_bot.seen[-1].messages[-1]["content"] == "Best fort?"
+    messages = client.get(f"/api/conversations/{chat['id']}/messages").get_json()
+    assert [(m["role"], m["content"]) for m in messages] == [("user", "Best fort?"), ("assistant", "Amber Fort")]
+
+
+def test_streamed_regenerate_replaces_the_reply_only_when_done(client, fake_bot):
+    chat = new_chat(client)
+    client.post(f"/api/conversations/{chat['id']}/messages/stream", json={"content": "hi"}).get_data()
+    fake_bot.error = "Claude failed"
+    events = sse_events(client.post(f"/api/conversations/{chat['id']}/regenerate/stream").get_data(as_text=True))
+    assert [e[0] for e in events] == ["error"]
+    messages = client.get(f"/api/conversations/{chat['id']}/messages").get_json()
+    assert [m["content"] for m in messages] == ["hi", "Hi back"]
+
+    fake_bot.error = None
+    fake_bot.reply = ["Hello again"]
+    client.post(f"/api/conversations/{chat['id']}/regenerate/stream").get_data()
+    # The new reply answers "hi"; the old reply isn't shown to Claude.
+    assert [m["content"] for m in fake_bot.seen[-1].messages] == ["hi"]
+    messages = client.get(f"/api/conversations/{chat['id']}/messages").get_json()
+    assert [m["content"] for m in messages] == ["hi", "Hello again"]
+
+
+def test_streamed_regenerate_needs_something_to_answer(client):
+    chat = new_chat(client)
+    assert client.post(f"/api/conversations/{chat['id']}/regenerate/stream").status_code == 400

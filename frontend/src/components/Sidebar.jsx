@@ -1,4 +1,4 @@
-import { CloseIcon, MoonIcon, PlusIcon, SunIcon, TrashIcon } from './icons'
+import { CloseIcon, MemoryIcon, MoonIcon, PlusIcon, SunIcon, TrashIcon } from './icons'
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -33,6 +33,7 @@ export default function Sidebar({
   onDelete,
   onClose,
   onToggleTheme,
+  onOpenMemory,
 }) {
   return (
     <>
@@ -84,6 +85,10 @@ export default function Sidebar({
         </nav>
 
         <div className="sidebar-foot">
+          <button className="theme-btn" onClick={onOpenMemory}>
+            <MemoryIcon />
+            Memory
+          </button>
           <button className="theme-btn" onClick={onToggleTheme}>
             {isDark ? <SunIcon /> : <MoonIcon />}
             {isDark ? 'Light mode' : 'Dark mode'}

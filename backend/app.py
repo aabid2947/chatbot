@@ -179,6 +179,46 @@ def after_reply(convo_id, user_msg_id, reply_msg_id, is_first, first_message):
     jobs.after_turn(app, convo_id, user_msg_id, reply_msg_id)
 
 
+def stream_reply_events(convo_id, turn, *, opening=(), replace_id=None, finished=None):
+    """The SSE response for one streamed reply (see send_message_stream).
+    The reply is saved only once Claude has finished; `replace_id` is a reply
+    deleted at that moment, and `finished(reply_id)` runs after saving."""
+
+    @stream_with_context
+    def events():
+        yield from opening
+        parts = []
+        try:
+            for piece in bot.stream_reply(turn):
+                if isinstance(piece, str):
+                    parts.append(piece)
+                    yield sse("delta", {"text": piece})
+                else:
+                    yield sse("tool", {"name": piece.name, "label": mcp.LABELS.get(piece.name, "Working…")})
+        except bot.LLMError as err:
+            yield sse("error", {"error": str(err)})
+            return
+        current = db.session.get(Conversation, convo_id)
+        if current is None:
+            yield sse("error", {"error": "This chat was deleted."})
+            return
+        if replace_id is not None:
+            old = db.session.get(Message, replace_id)
+            if old is not None:
+                current.messages.remove(old)  # delete-orphan removes the row
+        reply = save_reply(current, "".join(parts))
+        reply_data, convo_data = reply.to_dict(), current.to_dict()
+        if finished:
+            finished(reply.id)
+        yield sse("done", {"reply": reply_data, "conversation": convo_data})
+
+    return Response(
+        events(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def sse(event, data):
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -336,39 +376,41 @@ def register_routes(app):
         tool         -> {"name", "label"} when Claude starts looking something up
         delta        -> {"text": "..."}, repeated as Claude writes
         done         -> {"reply": ..., "conversation": ...} once the reply is saved
-        error        -> {"error": "..."} if Claude failed; nothing is saved
+        error        -> {"error": "..."} if Claude failed; no reply is saved, but the
+                        user message is (retry with regenerate/stream)
         """
         convo = get_conversation(conversation_id)
         user_msg, is_first = save_user_message(convo, read_content())
         user_msg_data = user_msg.to_dict()
-        turn = build_turn(convo, convo.messages)
-        convo_id = convo.id
 
-        @stream_with_context
-        def events():
-            yield sse("user_message", user_msg_data)
-            parts = []
-            try:
-                for piece in bot.stream_reply(turn):
-                    if isinstance(piece, str):
-                        parts.append(piece)
-                        yield sse("delta", {"text": piece})
-                    else:
-                        yield sse("tool", {"name": piece.name, "label": mcp.LABELS.get(piece.name, "Working…")})
-            except bot.LLMError as err:
-                yield sse("error", {"error": str(err)})
-                return
-            current = db.session.get(Conversation, convo_id)
-            reply = save_reply(current, "".join(parts))
-            reply_data, convo_data = reply.to_dict(), current.to_dict()
-            after_reply(convo_id, user_msg_data["id"], reply.id, is_first, user_msg_data["content"])
-            yield sse("done", {"reply": reply_data, "conversation": convo_data})
+        def finished(reply_id):
+            after_reply(convo.id, user_msg_data["id"], reply_id, is_first, user_msg_data["content"])
 
-        return Response(
-            events(),
-            mimetype="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        return stream_reply_events(convo.id, build_turn(convo, convo.messages),
+                                   opening=[sse("user_message", user_msg_data)], finished=finished)
+
+    @app.post("/api/conversations/<conversation_id>/regenerate/stream")
+    def regenerate_stream(conversation_id):
+        """Stream a fresh reply to the last user message, with the same events
+        (minus user_message). If the chat ends in a reply, that reply is
+        replaced once the new one is done, and kept if Claude fails. If it ends
+        in a user message whose reply failed, this answers it."""
+        convo = get_conversation(conversation_id)
+        history = list(convo.messages)
+        replace_id = None
+        if history and history[-1].role == "assistant":
+            replace_id = history.pop().id
+        if not history or history[-1].role != "user":
+            abort(400, description="There is nothing to reply to")
+        user_id, first_content = history[-1].id, history[0].content
+        is_first = len(history) == 1
+
+        def finished(reply_id):
+            # A replaced reply already had its memory jobs run; a first answer hasn't.
+            if replace_id is None:
+                after_reply(convo.id, user_id, reply_id, is_first, first_content)
+
+        return stream_reply_events(convo.id, build_turn(convo, history), replace_id=replace_id, finished=finished)
 
     @app.post("/api/conversations/<conversation_id>/regenerate")
     def regenerate(conversation_id):

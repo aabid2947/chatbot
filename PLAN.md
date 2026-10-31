@@ -29,7 +29,9 @@ stateless print mode.
 - **Phase 3 (PDFs): done, backend only.** Upload, local storage, page text, search chunks, map-reduce
   summaries, PDF tools (search_pdfs, get_document_summary, read_pdf_pages). 96 tests. Live-tested with
   real Claude on 2026-10-31: a 15-page paper was searchable in ~20 s and fully summarized in ~30 s.
-- Next: the web side.
+- **Web side: done.** Streaming replies with tool status, PDF upload (button and drag and drop) with
+  status chips and a summary dialog, clickable page citations, memory panel. Checked in a real browser on
+  2026-10-31 (light, dark and phone width).
 
 ## The LLM adapter (`backend/llm.py`)
 

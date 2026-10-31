@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import Composer from './components/Composer'
-import Message, { TypingIndicator } from './components/Message'
+import { DocumentChips, DocumentDialog } from './components/Documents'
+import MemoryPanel from './components/MemoryPanel'
+import Message, { BotMark, LiveReply, TypingIndicator } from './components/Message'
 import Sidebar from './components/Sidebar'
-import { CloseIcon, MenuIcon, PlusIcon } from './components/icons'
+import { CloseIcon, FileIcon, MenuIcon, PlusIcon, RetryIcon } from './components/icons'
 import './App.css'
 
 const SUGGESTIONS = ['Plan a 3-day trip', 'Explain some code', 'Draft an email', 'Summarize an article']
+const DOC_POLL_MS = 1500
 
 function readSavedTheme() {
   try {
@@ -16,6 +19,9 @@ function readSavedTheme() {
   }
 }
 
+const isPdf = (file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
+const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files')
+
 export default function App() {
   const [conversations, setConversations] = useState([])
   const [activeId, setActiveId] = useState(null) // null = a new, unsaved chat
@@ -24,6 +30,12 @@ export default function App() {
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState(false) // waiting on the bot
   const [pendingThread, setPendingThread] = useState(null)
+  const [live, setLive] = useState(null) // the reply being streamed: { chatId, text, tool }
+  const [docs, setDocs] = useState({ chatId: null, list: [] }) // this chat's PDFs
+  const [openDocId, setOpenDocId] = useState(null)
+  const [dragging, setDragging] = useState(false)
+  const [memoryOpen, setMemoryOpen] = useState(false)
+  const [memoryVersion, setMemoryVersion] = useState(0)
   const [error, setError] = useState(null) // { text, retry? }
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -36,11 +48,21 @@ export default function App() {
   const inputRef = useRef(null)
   const scrollRef = useRef(null)
   const activeRef = useRef(null) // current chat, readable inside async handlers
+  const threadRef = useRef(thread)
+  const busyRef = useRef(false) // set synchronously, so double clicks can't send twice
   const justCreatedRef = useRef(null) // chat we created locally; don't refetch over it
+  const dragDepth = useRef(0)
+  const timers = useRef([])
 
   useEffect(() => {
     activeRef.current = activeId
   }, [activeId])
+  useEffect(() => {
+    threadRef.current = thread
+  }, [thread])
+  useEffect(() => () => timers.current.forEach(clearTimeout), [])
+
+  const later = (fn, ms) => timers.current.push(setTimeout(fn, ms))
 
   // ---- Theme ----
   useEffect(() => {
@@ -67,7 +89,7 @@ export default function App() {
       .listConversations()
       .then((list) => {
         setConversations(list)
-        setError(null)
+        setError((e) => (e?.retry === loadConversations ? null : e))
       })
       .catch((e) => setError({ text: e.message, retry: loadConversations }))
   }, [])
@@ -86,13 +108,40 @@ export default function App() {
     }
   }, [activeId])
 
+  // The chat's PDFs. Uploads still in flight are kept while the list reloads.
+  const loadDocs = useCallback((chatId) => {
+    return api.listDocuments(chatId).then((list) =>
+      setDocs((d) => ({
+        chatId,
+        list: [...list, ...(d.chatId === chatId ? d.list.filter((x) => x.uploading) : [])],
+      })),
+    )
+  }, [])
+
+  useEffect(() => {
+    // A new, unsaved chat shows no PDFs: shownDocs only shows the active chat's.
+    if (activeId == null) return
+    loadDocs(activeId).catch((e) => setError({ text: e.message }))
+  }, [activeId, loadDocs])
+
+  const shownDocs = docs.chatId === activeId ? docs.list : []
+  const docsBusy = shownDocs.some((d) => d.status === 'processing')
+
+  // Watch PDFs that are still being read, so their chips move on by themselves.
+  useEffect(() => {
+    if (!docsBusy || activeId == null) return
+    const timer = setInterval(() => loadDocs(activeId).catch(() => {}), DOC_POLL_MS)
+    return () => clearInterval(timer)
+  }, [docsBusy, activeId, loadDocs])
+
   const shown = thread.id === activeId ? thread.list : []
-  const showTyping = pending && pendingThread === activeId
+  const liveHere = live && live.chatId === activeId ? live : null
+  const showTyping = pending && pendingThread === activeId && !liveHere
 
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [shown.length, showTyping, activeId])
+  }, [shown.length, showTyping, activeId, liveHere?.text, liveHere?.tool])
 
   // ---- Actions ----
   function openChat(id) {
@@ -100,6 +149,7 @@ export default function App() {
     setActiveId(id)
     setError(null)
     setSidebarOpen(false)
+    setOpenDocId(null)
   }
 
   function newChat() {
@@ -108,11 +158,12 @@ export default function App() {
     setThread({ id: null, list: [] })
     setError(null)
     setSidebarOpen(false)
+    setOpenDocId(null)
     inputRef.current?.focus()
   }
 
   async function deleteChat(convo) {
-    if (!window.confirm(`Delete "${convo.title}"? This can't be undone.`)) return
+    if (!window.confirm(`Delete "${convo.title}"? Its PDFs are deleted too. This can't be undone.`)) return
     try {
       await api.deleteConversation(convo.id)
       setConversations((list) => list.filter((c) => c.id !== convo.id))
@@ -122,76 +173,190 @@ export default function App() {
     }
   }
 
+  /** Create the chat on the server when the first thing happens in a new one. */
+  async function createChat() {
+    const convo = await api.createConversation()
+    justCreatedRef.current = convo.id
+    setConversations((list) => [convo, ...list])
+    if (activeRef.current == null) {
+      setThread((t) => (t.id == null ? { ...t, id: convo.id } : t))
+      setActiveId(convo.id)
+      activeRef.current = convo.id
+    }
+    return convo.id
+  }
+
+  /** Stream events for one reply into `live`, and the finished reply into the thread. */
+  function replyHandler(id, onDone) {
+    let failure = null
+    const handle = (event, data) => {
+      if (event === 'tool') setLive((l) => l && { ...l, tool: data.label })
+      else if (event === 'delta') setLive((l) => l && { ...l, text: l.text + data.text, tool: null })
+      else if (event === 'error') failure = data.error
+      else if (event === 'done') {
+        setThread((t) => (t.id === id ? { id, list: [...t.list, data.reply] } : t))
+        setConversations((list) => [data.conversation, ...list.filter((c) => c.id !== id)])
+        // Facts are picked out in the background a few seconds after a reply.
+        later(() => setMemoryVersion((v) => v + 1), 9000)
+        onDone?.()
+      }
+    }
+    return { handle, failed: () => failure }
+  }
+
+  function finishReply() {
+    setLive(null)
+    setPending(false)
+    busyRef.current = false
+    inputRef.current?.focus()
+  }
+
   async function send(text) {
     const content = text.trim()
-    if (!content || pending) return
+    if (!content || busyRef.current) return
+    busyRef.current = true
     setError(null)
     setDraft('')
     setPending(true)
 
     // Show the user's message straight away.
     const temp = { id: `temp-${Date.now()}`, role: 'user', content }
-    let id = activeId
+    let id = activeRef.current
+    const isFirst = id == null || threadRef.current.list.length === 0
+    let saved = false // the server has the message, so retrying must not send it again
     setPendingThread(id)
     setThread((t) => ({ id, list: t.id === id ? [...t.list, temp] : [temp] }))
 
     try {
-      if (id == null) {
-        const convo = await api.createConversation()
-        id = convo.id
-        justCreatedRef.current = id
-        setConversations((list) => [convo, ...list])
-        if (activeRef.current == null) {
-          setThread((t) => (t.id == null ? { ...t, id } : t))
-          setActiveId(id)
-          activeRef.current = id
-        }
-        setPendingThread(id)
-      }
-
-      const res = await api.sendMessage(id, content)
-      setConversations((list) => [res.conversation, ...list.filter((c) => c.id !== id)])
-      setThread((t) =>
-        t.id === id
-          ? {
-              id,
-              list: [
-                ...t.list.filter((m) => m.id !== temp.id && m.id !== res.user_message.id),
-                res.user_message,
-                res.reply,
-              ],
-            }
-          : t,
-      )
+      if (id == null) id = await createChat()
+      setPendingThread(id)
+      setLive({ chatId: id, text: '', tool: null })
+      const reply = replyHandler(id, () => {
+        // The title is written in the background just after the first reply.
+        if (isFirst) [7000, 15000].forEach((ms) => later(loadConversations, ms))
+      })
+      await api.streamMessage(id, content, (event, data) => {
+        if (event === 'user_message') {
+          saved = true
+          setThread((t) =>
+            t.id === id ? { id, list: t.list.map((m) => (m.id === temp.id ? data : m)) } : t,
+          )
+        } else reply.handle(event, data)
+      })
+      if (reply.failed()) throw new Error(reply.failed())
     } catch (e) {
-      // Put the text back so nothing is lost.
-      setThread((t) => ({ ...t, list: t.list.filter((m) => m.id !== temp.id) }))
-      if (activeRef.current === id) setDraft(content)
-      setError({ text: e.message, retry: () => send(content) })
+      if (saved) {
+        setError({ text: e.message, retry: retryLast })
+      } else {
+        // Put the text back so nothing is lost.
+        setThread((t) => ({ ...t, list: t.list.filter((m) => m.id !== temp.id) }))
+        if (activeRef.current === id) setDraft(content)
+        setError({ text: e.message, retry: () => send(content) })
+      }
     } finally {
-      setPending(false)
-      inputRef.current?.focus()
+      finishReply()
     }
   }
 
+  /** A fresh reply to the last message: replaces the last reply, or answers a
+   * message whose reply failed. Reads refs, so a stale Retry button still works. */
   async function retryLast() {
-    const id = activeId
-    const last = shown[shown.length - 1]
-    if (pending || id == null || last?.role !== 'assistant') return
+    const id = activeRef.current
+    const t = threadRef.current
+    const last = t.id === id ? t.list[t.list.length - 1] : null
+    if (busyRef.current || id == null || !last) return
+    busyRef.current = true
+    const replacing = last.role === 'assistant'
     setError(null)
     setPending(true)
     setPendingThread(id)
-    setThread((t) => ({ ...t, list: t.list.slice(0, -1) }))
+    if (replacing) setThread((cur) => (cur.id === id ? { ...cur, list: cur.list.slice(0, -1) } : cur))
+    setLive({ chatId: id, text: '', tool: null })
     try {
-      const res = await api.regenerate(id)
-      setThread((t) => (t.id === id ? { ...t, list: [...t.list, res.reply] } : t))
-      setConversations((list) => [res.conversation, ...list.filter((c) => c.id !== id)])
+      const reply = replyHandler(id)
+      await api.streamRegenerate(id, reply.handle)
+      if (reply.failed()) throw new Error(reply.failed())
     } catch (e) {
-      setThread((t) => (t.id === id ? { ...t, list: [...t.list, last] } : t))
+      if (replacing) {
+        setThread((cur) =>
+          cur.id === id && !cur.list.includes(last) ? { ...cur, list: [...cur.list, last] } : cur,
+        )
+      }
       setError({ text: e.message, retry: retryLast })
     } finally {
-      setPending(false)
+      finishReply()
     }
+  }
+
+  // ---- PDFs ----
+  async function upload(files) {
+    const pdfs = files.filter(isPdf)
+    if (pdfs.length < files.length) setError({ text: 'Only PDF files can be added.' })
+    if (!pdfs.length) return
+    let id = activeRef.current
+    try {
+      if (id == null) id = await createChat()
+    } catch (e) {
+      setError({ text: e.message })
+      return
+    }
+    for (const file of pdfs) {
+      const temp = { id: `upload-${Date.now()}-${file.name}`, filename: file.name, uploading: true }
+      setDocs((d) => (d.chatId === id ? { ...d, list: [...d.list, temp] } : { chatId: id, list: [temp] }))
+      try {
+        const doc = await api.uploadDocument(id, file)
+        setDocs((d) =>
+          d.chatId === id ? { ...d, list: d.list.map((x) => (x.id === temp.id ? doc : x)) } : d,
+        )
+      } catch (e) {
+        setDocs((d) => ({ ...d, list: d.list.filter((x) => x.id !== temp.id) }))
+        setError({ text: `${file.name}: ${e.message}` })
+      }
+    }
+    loadConversations() // an upload moves the chat to the top
+  }
+
+  async function removeDoc(doc) {
+    if (!window.confirm(`Remove "${doc.filename}" from this chat?`)) return
+    try {
+      await api.deleteDocument(doc.id)
+      setDocs((d) => ({ ...d, list: d.list.filter((x) => x.id !== doc.id) }))
+      if (openDocId === doc.id) setOpenDocId(null)
+    } catch (e) {
+      setError({ text: e.message })
+    }
+  }
+
+  async function retryDoc(doc) {
+    try {
+      const fresh = await api.retryDocument(doc.id)
+      setDocs((d) => ({ ...d, list: d.list.map((x) => (x.id === doc.id ? fresh : x)) }))
+    } catch (e) {
+      setError({ text: e.message })
+    }
+  }
+
+  const dropHandlers = {
+    onDragEnter: (e) => {
+      if (!hasFiles(e)) return
+      dragDepth.current += 1
+      setDragging(true)
+    },
+    onDragLeave: (e) => {
+      if (!hasFiles(e)) return
+      dragDepth.current = Math.max(0, dragDepth.current - 1)
+      if (dragDepth.current === 0) setDragging(false)
+    },
+    onDragOver: (e) => {
+      if (hasFiles(e)) e.preventDefault()
+    },
+    onDrop: (e) => {
+      if (!hasFiles(e)) return
+      e.preventDefault()
+      dragDepth.current = 0
+      setDragging(false)
+      upload([...e.dataTransfer.files])
+    },
   }
 
   function pickSuggestion(text) {
@@ -200,8 +365,13 @@ export default function App() {
   }
 
   const activeTitle = conversations.find((c) => c.id === activeId)?.title ?? 'New chat'
-  const isEmpty = shown.length === 0 && !showTyping && (activeId == null || thread.id === activeId)
+  const isEmpty =
+    shown.length === 0 && !showTyping && !liveHere && (activeId == null || thread.id === activeId)
   const lastIndex = shown.length - 1
+  const last = shown[lastIndex]
+  const replyMissing =
+    !pending && last?.role === 'user' && typeof last.id === 'number' && !error
+  const openDoc = shownDocs.find((d) => d.id === openDocId)
 
   return (
     <div className="app">
@@ -215,9 +385,13 @@ export default function App() {
         onDelete={deleteChat}
         onClose={() => setSidebarOpen(false)}
         onToggleTheme={() => setTheme(isDark ? 'light' : 'dark')}
+        onOpenMemory={() => {
+          setMemoryOpen(true)
+          setSidebarOpen(false)
+        }}
       />
 
-      <main className="main">
+      <main className="main" {...dropHandlers}>
         <header className="topbar">
           <button
             className="icon-btn ghost mobile-only"
@@ -244,18 +418,32 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+                <p className="empty-hint">Or add a PDF with + and ask about it.</p>
               </div>
             ) : (
               shown.map((m, i) => (
                 <Message
                   key={m.id}
                   message={m}
+                  documents={shownDocs}
                   canRetry={i === lastIndex && m.role === 'assistant' && !pending}
                   onRetry={retryLast}
                 />
               ))
             )}
+            {liveHere && <LiveReply text={liveHere.text} tool={liveHere.tool} documents={shownDocs} />}
             {showTyping && <TypingIndicator />}
+            {replyMissing && (
+              <div className="msg-bot">
+                <BotMark />
+                <div className="msg-missing">
+                  No reply to this yet.
+                  <button className="msg-action" onClick={retryLast}>
+                    <RetryIcon /> Get a reply
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -279,10 +467,43 @@ export default function App() {
           value={draft}
           onChange={setDraft}
           onSubmit={() => send(draft)}
+          onAttach={upload}
           busy={pending}
           inputRef={inputRef}
-        />
+        >
+          <DocumentChips
+            documents={shownDocs}
+            onOpen={(doc) => setOpenDocId(doc.id)}
+            onRemove={removeDoc}
+          />
+        </Composer>
+
+        {dragging && (
+          <div className="drop-overlay" aria-hidden="true">
+            <div className="drop-card">
+              <FileIcon size={28} />
+              <b>Drop a PDF to add it to this chat</b>
+              <span>Then ask anything about it</span>
+            </div>
+          </div>
+        )}
       </main>
+
+      {openDoc && (
+        <DocumentDialog
+          key={openDoc.id}
+          document={openDoc}
+          onClose={() => setOpenDocId(null)}
+          onRemove={removeDoc}
+          onRetry={retryDoc}
+        />
+      )}
+
+      <MemoryPanel
+        open={memoryOpen}
+        refreshKey={memoryVersion}
+        onClose={() => setMemoryOpen(false)}
+      />
     </div>
   )
 }
