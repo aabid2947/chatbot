@@ -23,8 +23,10 @@ stateless print mode.
 - **Phase 1 (chat and saving): done, backend only.** UUID conversation ids, every
   message saved, local Claude replies (plain and streamed), history fetch, rename,
   background titles. 34 tests. Live-tested with real Claude on 2026-10-31.
-- Phase 2 (memory): next.
-- Phase 3 (PDFs): after that.
+- **Phase 2 (memory): done, backend only.** Facts with confidence scores, promotion of dug-up details,
+  rolling summary, local embeddings, the tool server (search_history, search_memory, remember_fact,
+  forget_fact), memory API. 75 tests. Live-tested with real Claude on 2026-10-31.
+- Phase 3 (PDFs): next.
 
 ## The LLM adapter (`backend/llm.py`)
 
@@ -109,7 +111,8 @@ Goes up (the user keeps asking about it):
 - Each later exchange that refers to the fact or relies on it → +0.15, capped at 1.0
 
 Goes down (the user stops asking about it):
-- Each active day (a day the user chats at all) where the fact never comes up → −0.03
+- Each active day (a day the user chats at all) where the fact never comes up → −0.005 (corrected from −0.03, which would
+  have unpinned a clear fact after only 4 active days)
 - Calendar days off do not count, so a week away does not erase memory.
 - Locked facts do not decay.
 
@@ -137,7 +140,7 @@ The background fact job gets:
 - the tool calls made this turn (which history messages or facts were fetched).
 
 It returns `add`, `update`, `delete`, `used: [fact ids]` and
-`promote: [message ids]`. The app applies the score changes. Decay runs once at
+`promote: [message ids]`. The app applies the score changes. Decay is worked out when a score is read (stored score minus 0.005 per idle active day since it was last touched), so no job runs at
 the start of each active day.
 
 Every score change is written to `fact_events`, so the memory panel can show
@@ -186,7 +189,7 @@ messages(id, conversation_id, role, content, embedding blob, created_at)
 facts(id, content, category, score real, locked bool, origin,             -- global, about the user
       use_count, last_used_at, source_message_id, embedding blob,       -- origin: extracted | remembered | promoted
       created_at, updated_at)
-fact_events(id, fact_id, kind, delta, score_after, message_id, created_at) -- kind: created | used | decayed | promoted | edited
+fact_events(id, fact_id, kind, delta, score_after, message_id, created_at) -- kind: created | used | promoted | edited | locked | unlocked
 activity_days(day date primary key)                                        -- days the user chatted; drives decay
 documents(id, conversation_id, filename, stored_path, pages, status, summary, created_at)
 chunks(id, document_id, page_from, page_to, content, embedding blob)

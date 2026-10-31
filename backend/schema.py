@@ -26,6 +26,30 @@ def upgrade(engine):
         )
     if isinstance(columns["id"]["type"], Integer):
         _conversation_ids_to_uuid(engine, insp)
+        insp = inspect(engine)
+    _add_missing_columns(engine, insp)
+
+
+# Columns added after a table was first created. New tables come from create_all().
+ADDED_COLUMNS = {
+    "conversations": {
+        "summary": "TEXT NULL",
+        "summarized_upto_id": "INT NULL",
+    },
+    "messages": {
+        "embedding": "BLOB NULL",
+    },
+}
+
+
+def _add_missing_columns(engine, insp):
+    for table, wanted in ADDED_COLUMNS.items():
+        have = {c["name"] for c in insp.get_columns(table)}
+        for name, ddl in wanted.items():
+            if name not in have:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                log.info("Added column %s.%s", table, name)
 
 
 def _conversation_ids_to_uuid(engine, insp):

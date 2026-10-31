@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import pytest
 
 BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND))
+os.environ["EMBEDDINGS"] = "fake"  # no model download in tests
 
 FAKE_CLAUDE = Path(__file__).resolve().parent / "fake_claude.py"
 
@@ -28,8 +30,8 @@ def fake_claude(monkeypatch):
     calls = []
 
     def use(mode):
-        def command(system_prompt, model, effort=None):
-            calls.append({"system_prompt": system_prompt, "model": model, "effort": effort})
+        def command(system_prompt, model, effort=None, extra=()):
+            calls.append({"system_prompt": system_prompt, "model": model, "effort": effort, "extra": list(extra)})
             return [sys.executable, str(FAKE_CLAUDE), mode]
 
         monkeypatch.setattr(llm, "_command", command)
@@ -40,7 +42,6 @@ def fake_claude(monkeypatch):
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
-    monkeypatch.setenv("GENERATE_TITLES", "0")
     from app import create_app
     from models import db
 
@@ -48,6 +49,10 @@ def app(tmp_path, monkeypatch):
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'test.db'}",
         "SQLALCHEMY_ENGINE_OPTIONS": {},
         "TESTING": True,
+        "GENERATE_TITLES": False,
+        "MEMORY_JOBS": False,
+        "BACKGROUND_INLINE": True,
+        "SELF_URL": "http://127.0.0.1:5999",
     })
     yield application
     with application.app_context():
@@ -61,25 +66,44 @@ def client(app):
 
 
 @pytest.fixture
+def ctx(app):
+    """An app context, for tests that call memory/jobs functions directly."""
+    with app.app_context():
+        yield
+
+
+@pytest.fixture
 def fake_bot(monkeypatch):
-    """Replace the model with a scripted one. Returns the list of histories it saw."""
+    """Replace the model with a scripted one. `seen` holds every prompt.Turn it got."""
     import bot
 
-    seen = []
-    state = {"reply": ["Hi", " back"], "error": None}
-
-    def stream_reply(history):
-        seen.append(history)
-        if state["error"]:
-            raise bot.LLMError(state["error"])
-        yield from state["reply"]
-
-    monkeypatch.setattr(bot, "stream_reply", stream_reply)
-
     class FakeBot:
-        pass
+        def __init__(self):
+            self.seen = []
+            self.reply = ["Hi", " back"]
+            self.error = None
+            self.facts_plan = {"add": [], "update": [], "delete": [], "used": [], "promote": []}
+            self.facts_calls = []
+            self.summary = "SUMMARY"
+            self.summary_calls = []
+
+        def stream_reply(self, turn):
+            self.seen.append(turn)
+            if self.error:
+                raise bot.LLMError(self.error)
+            yield from self.reply
+
+        def extract_facts(self, known, found_messages, found_facts, user_text, reply_text):
+            self.facts_calls.append({"known": known, "found_messages": found_messages,
+                                     "found_facts": found_facts, "user": user_text, "reply": reply_text})
+            return self.facts_plan
+
+        def summarize(self, old_summary, messages):
+            self.summary_calls.append((old_summary, messages))
+            return self.summary
 
     fake = FakeBot()
-    fake.seen = seen
-    fake.state = state
+    monkeypatch.setattr(bot, "stream_reply", fake.stream_reply)
+    monkeypatch.setattr(bot, "extract_facts", fake.extract_facts)
+    monkeypatch.setattr(bot, "summarize", fake.summarize)
     return fake

@@ -42,13 +42,13 @@ def test_sending_saves_both_messages_and_history_comes_back_in_order(client, fak
     ]
     assert all(m["conversation_id"] == chat["id"] for m in full["messages"])
     # The model saw the whole history, ending with the new message.
-    assert fake_bot.seen[-1][-1] == {"role": "user", "content": "Make it 3 days"}
-    assert len(fake_bot.seen[-1]) == 3
+    assert fake_bot.seen[-1].messages[-1] == {"role": "user", "content": "Make it 3 days"}
+    assert len(fake_bot.seen[-1].messages) == 3
 
 
 def test_failed_reply_still_saves_the_users_message(client, fake_bot):
     chat = new_chat(client)
-    fake_bot.state["error"] = "Claude failed: Not logged in"
+    fake_bot.error = "Claude failed: Not logged in"
     res = client.post(f"/api/conversations/{chat['id']}/messages", json={"content": "hello?"})
     assert res.status_code == 502
     assert "Not logged in" in res.get_json()["error"]
@@ -58,7 +58,7 @@ def test_failed_reply_still_saves_the_users_message(client, fake_bot):
 
 def test_streaming_sends_pieces_then_saves_the_reply(client, fake_bot):
     chat = new_chat(client)
-    fake_bot.state["reply"] = ["Pink ", "City"]
+    fake_bot.reply = ["Pink ", "City"]
     res = client.post(f"/api/conversations/{chat['id']}/messages/stream", json={"content": "Jaipur nickname?"})
     assert res.status_code == 200
     assert res.mimetype == "text/event-stream"
@@ -74,7 +74,7 @@ def test_streaming_sends_pieces_then_saves_the_reply(client, fake_bot):
 
 def test_streaming_error_is_reported_and_no_reply_is_saved(client, fake_bot):
     chat = new_chat(client)
-    fake_bot.state["error"] = "Claude failed: timed out after 300s"
+    fake_bot.error = "Claude failed: timed out after 300s"
     res = client.post(f"/api/conversations/{chat['id']}/messages/stream", json={"content": "hi"})
     events = sse_events(res.get_data(as_text=True))
     assert [e[0] for e in events] == ["user_message", "error"]
@@ -116,19 +116,19 @@ def test_unknown_chat_is_404_and_empty_message_is_400(client):
 def test_regenerate_replaces_only_the_last_reply(client, fake_bot):
     chat = new_chat(client)
     client.post(f"/api/conversations/{chat['id']}/messages", json={"content": "hi"})
-    fake_bot.state["reply"] = ["second try"]
+    fake_bot.reply = ["second try"]
     res = client.post(f"/api/conversations/{chat['id']}/regenerate")
     assert res.status_code == 201
     messages = client.get(f"/api/conversations/{chat['id']}/messages").get_json()
     assert [m["content"] for m in messages] == ["hi", "second try"]
     # The model was not shown the reply it is replacing.
-    assert fake_bot.seen[-1] == [{"role": "user", "content": "hi"}]
+    assert fake_bot.seen[-1].messages == [{"role": "user", "content": "hi"}]
 
 
 def test_failed_regenerate_keeps_the_old_reply(client, fake_bot):
     chat = new_chat(client)
     client.post(f"/api/conversations/{chat['id']}/messages", json={"content": "hi"})
-    fake_bot.state["error"] = "Claude failed"
+    fake_bot.error = "Claude failed"
     assert client.post(f"/api/conversations/{chat['id']}/regenerate").status_code == 502
     messages = client.get(f"/api/conversations/{chat['id']}/messages").get_json()
     assert [m["content"] for m in messages] == ["hi", "Hi back"]

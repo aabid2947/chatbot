@@ -1,3 +1,4 @@
+import json
 import time
 
 import pytest
@@ -69,7 +70,31 @@ def test_timeout_kills_a_stuck_process(fake_claude, monkeypatch):
 def test_model_and_effort_are_passed_through(fake_claude):
     calls = fake_claude("ok")
     llm.complete("hi", "sys", model="haiku", effort="low")
-    assert calls[-1] == {"system_prompt": "sys", "model": "haiku", "effort": "low"}
+    assert calls[-1] == {"system_prompt": "sys", "model": "haiku", "effort": "low", "extra": []}
+
+
+def test_tool_calls_are_reported_and_tools_are_handed_over(fake_claude):
+    calls = fake_claude("tool_then_text")
+    config = {"mcpServers": {"memory": {"type": "http", "url": "http://x"}}}
+    items = list(llm.stream("hi", "sys", mcp_config=config, allowed_tools=["mcp__memory__a", "mcp__memory__b"]))
+    assert items == [llm.ToolUse("search_history"), "Found it."]
+    extra = calls[-1]["extra"]
+    assert json.loads(extra[extra.index("--mcp-config") + 1]) == config
+    assert extra[extra.index("--allowedTools") + 1] == "mcp__memory__a,mcp__memory__b"
+
+
+def test_structured_returns_the_schema_data(fake_claude):
+    calls = fake_claude("structured")
+    schema = {"type": "object"}
+    assert llm.structured("hi", "sys", schema) == {"facts": ["The user is Ravi."]}
+    extra = calls[-1]["extra"]
+    assert json.loads(extra[extra.index("--json-schema") + 1]) == schema
+    assert calls[-1]["model"] == "haiku"
+
+
+def test_structured_falls_back_to_json_text(fake_claude):
+    fake_claude("structured_text_only")
+    assert llm.structured("hi", "sys", {}) == {"facts": ["from text"]}
 
 
 def test_real_command_is_stateless_and_locked_down(monkeypatch):

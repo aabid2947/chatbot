@@ -2,11 +2,12 @@
 
 Every call starts a fresh `claude -p` process and nothing carries over between
 calls, so the caller sends the whole prompt every time. The flags switch off
-everything that makes Claude Code a coding agent (tools, skills, the owner's
-settings, hooks and CLAUDE.md) so it behaves like a plain chat model.
+everything that makes Claude Code a coding agent (built-in tools, skills, the
+owner's settings, hooks and CLAUDE.md) so it behaves like a plain chat model.
+The only tools it gets are the ones we hand it with `--mcp-config`.
 
 Do not add `--safe-mode`: besides the owner's setup it also blocks the
-`--mcp-config` tool servers phase 2 relies on.
+`--mcp-config` tool servers.
 """
 
 import json
@@ -19,12 +20,19 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 log = logging.getLogger("chatbot.llm")
 
 
 class LLMError(RuntimeError):
     """Claude could not produce a reply."""
+
+
+class ToolUse(NamedTuple):
+    """Yielded by `stream` when Claude starts calling one of our tools."""
+
+    name: str
 
 
 def chat_model():
@@ -63,7 +71,7 @@ def _workdir():
     return str(path)
 
 
-def _command(system_prompt, model, effort=None):
+def _command(system_prompt, model, effort=None, extra=()):
     cmd = [
         claude_executable(),
         "-p",
@@ -80,15 +88,19 @@ def _command(system_prompt, model, effort=None):
     ]
     if effort:
         cmd += ["--effort", effort]
-    return cmd
+    return cmd + list(extra)
+
+
+def _top_level_stream_event(event):
+    if event.get("type") != "stream_event" or event.get("parent_tool_use_id"):
+        return None
+    return event.get("event") or {}
 
 
 def _text_delta(event):
     """The text in one stream event, or None if it carries no reply text."""
-    if event.get("type") != "stream_event" or event.get("parent_tool_use_id"):
-        return None
-    inner = event.get("event") or {}
-    if inner.get("type") != "content_block_delta":
+    inner = _top_level_stream_event(event)
+    if not inner or inner.get("type") != "content_block_delta":
         return None
     delta = inner.get("delta") or {}
     if delta.get("type") != "text_delta":
@@ -96,25 +108,32 @@ def _text_delta(event):
     return delta.get("text") or None
 
 
+def _tool_start(event):
+    """The tool name if this event starts a tool call, else None."""
+    inner = _top_level_stream_event(event)
+    if not inner or inner.get("type") != "content_block_start":
+        return None
+    block = inner.get("content_block") or {}
+    if block.get("type") not in ("tool_use", "mcp_tool_use", "server_tool_use"):
+        return None
+    name = block.get("name") or ""
+    return name.split("__")[-1] if name.startswith("mcp__") else name
+
+
 def _is_message_start(event):
-    return (
-        event.get("type") == "stream_event"
-        and not event.get("parent_tool_use_id")
-        and (event.get("event") or {}).get("type") == "message_start"
-    )
+    inner = _top_level_stream_event(event)
+    return bool(inner) and inner.get("type") == "message_start"
 
 
-def stream(prompt, system_prompt, model=None, effort=None, label="chat"):
-    """Yield Claude's reply piece by piece as it is written.
-
-    Raises LLMError if Claude fails or returns nothing. If the caller stops
-    reading early (say the browser went away), the Claude process is killed.
-    """
-    model = model or chat_model()
-    cmd = _command(system_prompt, model, effort)
+def _run(prompt, system_prompt, model, effort, label, extra, out):
+    """Run one Claude process. Yields reply text (str) and ToolUse items, and
+    puts Claude's final `result` event in out["result"]. Raises LLMError if
+    Claude fails. If the caller stops reading early, the process is killed."""
+    cmd = _command(system_prompt, model, effort, extra)
     started = time.monotonic()
     first_text_at = None
     chars_out = 0
+    tools_used = []
 
     try:
         proc = subprocess.Popen(
@@ -162,6 +181,11 @@ def stream(prompt, system_prompt, model=None, effort=None, label="chat"):
             if _is_message_start(event):
                 texts_in_message = 0
                 continue
+            tool = _tool_start(event)
+            if tool:
+                tools_used.append(tool)
+                yield ToolUse(tool)
+                continue
             text = _text_delta(event)
             if text:
                 # A new assistant message after a tool call: keep paragraphs apart.
@@ -195,13 +219,11 @@ def stream(prompt, system_prompt, model=None, effort=None, label="chat"):
             detail = f"timed out after {timeout_seconds()}s"
         log.error("[%s] Claude failed after %.1fs (model %s): %.500s", label, elapsed, model, detail)
         raise LLMError(f"Claude failed: {detail}"[:500])
-    if chars_out == 0:
-        log.error("[%s] Claude returned an empty reply after %.1fs (model %s)", label, elapsed, model)
-        raise LLMError("Claude returned an empty reply.")
 
     usage = result.get("usage") or {}
     log.info(
-        "[%s] model %s: first words after %.1fs, finished in %.1fs, prompt %d chars, reply %d chars, tokens in/out %s/%s",
+        "[%s] model %s: first words after %.1fs, finished in %.1fs, prompt %d chars, reply %d chars, "
+        "tokens in/out %s/%s%s",
         label,
         model,
         first_text_at or elapsed,
@@ -212,9 +234,51 @@ def stream(prompt, system_prompt, model=None, effort=None, label="chat"):
         + (usage.get("cache_read_input_tokens") or 0)
         + (usage.get("cache_creation_input_tokens") or 0),
         usage.get("output_tokens"),
+        f", tools used: {', '.join(tools_used)}" if tools_used else "",
     )
+    out["result"] = result
+
+
+def stream(prompt, system_prompt, model=None, effort=None, label="chat", mcp_config=None, allowed_tools=()):
+    """Yield Claude's reply piece by piece as it is written: str for text,
+    ToolUse when it starts calling one of our tools.
+
+    `mcp_config` is a {"mcpServers": {...}} dict giving Claude our tools;
+    `allowed_tools` lists the full tool names it may call without asking.
+    Raises LLMError if Claude fails or writes no text."""
+    extra = []
+    if mcp_config:
+        extra += ["--mcp-config", json.dumps(mcp_config)]
+    if allowed_tools:
+        extra += ["--allowedTools", ",".join(allowed_tools)]
+    chars = 0
+    for item in _run(prompt, system_prompt, model or chat_model(), effort, label, extra, {}):
+        if isinstance(item, str):
+            chars += len(item)
+        yield item
+    if chars == 0:
+        log.error("[%s] Claude returned an empty reply", label)
+        raise LLMError("Claude returned an empty reply.")
 
 
 def complete(prompt, system_prompt, model=None, effort=None, label="chat"):
     """The whole reply as one string."""
-    return "".join(stream(prompt, system_prompt, model=model, effort=effort, label=label))
+    return "".join(
+        item for item in stream(prompt, system_prompt, model=model, effort=effort, label=label) if isinstance(item, str)
+    )
+
+
+def structured(prompt, system_prompt, schema, model=None, effort=None, label="json"):
+    """Claude's answer as data matching the JSON `schema`."""
+    out = {}
+    for _ in _run(prompt, system_prompt, model or background_model(), effort, label,
+                  ["--json-schema", json.dumps(schema)], out):
+        pass
+    result = out["result"]
+    data = result.get("structured_output")
+    if data is None:
+        try:
+            data = json.loads(result.get("result") or "")
+        except json.JSONDecodeError as err:
+            raise LLMError("Claude did not return the requested JSON.") from err
+    return data

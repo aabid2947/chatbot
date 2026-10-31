@@ -4,3 +4,5 @@ SQLAlchemy==2.1.6
 PyMySQL==1.2.3
 cryptography==50.0.2
 python-dotenv==1.2.4
+numpy==2.5.4
+fastembed==0.9.1

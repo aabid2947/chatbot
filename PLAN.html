@@ -113,8 +113,8 @@ th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;l
   <h2>Status</h2>
   <ul>
     <li><b>Phase 1, chat and saving: done (backend only).</b> Conversation ids, every message saved, local Claude replies (whole or streamed), history, rename, automatic titles. Tested live with real Claude on 31 Oct 2026.</li>
-    <li>Phase 2, memory: next.</li>
-    <li>Phase 3, PDFs: after that.</li>
+    <li><b>Phase 2, memory: done (backend only).</b> Facts with confidence scores, promotion of things you ask about, rolling summary, local search, Claude's memory tools, and a memory API for the panel. Tested live with real Claude on 31 Oct 2026.</li>
+    <li>Phase 3, PDFs: next.</li>
   </ul>
 </section>
 
@@ -225,7 +225,7 @@ th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;l
     <div class="rule up"><b>You ask about it more → score goes up</b>
       <p>Each time you bring it up, or Claude relies on it in an answer: <b>+0.15</b>, up to 1.0.</p></div>
     <div class="rule down"><b>You ask about it less → score goes down</b>
-      <p>Each day you chat without it coming up: <b>−0.03</b>. Days you don't chat don't count, so a week away won't erase anything.
+      <p>Each day you chat without it coming up: <b>−0.005</b>. (The plan first said −0.03. That was a maths slip: it would have unpinned a clear fact after 4 days, not 3 weeks.) Days you don't chat don't count, so a week away won't erase anything.
       A clear fact stays pinned about 3 weeks of normal use. One mention brings it back.</p></div>
     <div class="rule promo"><b>Unimportant, but you asked → promoted</b>
       <p>If Claude has to dig something out of old messages, it becomes a fact at <b>0.65</b>, pinned straight away.
@@ -244,7 +244,7 @@ th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;l
   <h3>How "used" is detected</h3>
   <p>After each reply, a background haiku call gets the latest exchange, the current facts, and the tools Claude used this turn.
   It answers with: facts to <code>add</code>, <code>update</code> or <code>delete</code>, which facts were <code>used</code>,
-  and which old messages to <code>promote</code>. The app applies the score changes. Decay runs once at the start of each day you chat.</p>
+  and which old messages to <code>promote</code>. The app applies the score changes. Fading is worked out whenever a score is read, so nothing has to run each day.</p>
 </section>
 
 <section id="tools">

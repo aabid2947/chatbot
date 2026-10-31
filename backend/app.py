@@ -10,8 +10,14 @@ from sqlalchemy import text
 load_dotenv()
 
 import bot  # noqa: E402  (reads settings from the environment loaded above)
+import embeddings  # noqa: E402
+import jobs  # noqa: E402
+import mcp  # noqa: E402
+import memory  # noqa: E402
+import memory_routes  # noqa: E402
 import schema  # noqa: E402
 from models import Conversation, Message, db, utcnow  # noqa: E402
+from prompt import Turn, recent_limit  # noqa: E402
 
 log = logging.getLogger("chatbot.app")
 
@@ -32,6 +38,12 @@ def create_app(config=None):
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL") or database_url()
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 280}
     app.config["GENERATE_TITLES"] = os.getenv("GENERATE_TITLES", "1") != "0"
+    app.config["MEMORY_JOBS"] = os.getenv("MEMORY_JOBS", "1") != "0"
+    app.config["TOOLS"] = os.getenv("TOOLS", "1") != "0"
+    app.config["BACKGROUND_INLINE"] = False
+    # Where Claude reaches our tool server: this backend, on this machine.
+    app.config["SELF_URL"] = os.getenv("SELF_URL") or f"http://127.0.0.1:{os.getenv('PORT', '5000')}"
+    app.config["MCP_SECRET"] = mcp.new_secret()
     if config:
         app.config.update(config)
     db.init_app(app)
@@ -41,6 +53,9 @@ def create_app(config=None):
         db.create_all()
 
     register_routes(app)
+    app.register_blueprint(mcp.bp)
+    app.register_blueprint(memory_routes.bp)
+    embeddings.warm_up()
     return app
 
 
@@ -69,6 +84,7 @@ def provisional_title(content):
 def save_user_message(convo, content):
     """Save the user's message straight away, so it is in the history even if
     the reply fails."""
+    memory.record_activity()
     is_first = not convo.messages
     msg = Message(conversation=convo, role="user", content=content)
     db.session.add(msg)
@@ -79,8 +95,22 @@ def save_user_message(convo, content):
     return msg, is_first
 
 
-def history_of(convo):
-    return [{"role": m.role, "content": m.content} for m in convo.messages]
+def build_turn(convo, messages):
+    """The prompt.Turn for replying to the last message in `messages`:
+    pinned facts, the summary, the unsummarised recent messages, and tools."""
+    upto = convo.summarized_upto_id or 0
+    pending = [m for m in messages if m.id > upto] or messages[-1:]
+    window = pending[-recent_limit():]
+    tools = None
+    if current_app.config["TOOLS"]:
+        tools = mcp.tools_for_turn(convo.id, messages[-1].id, window[0].id)
+    return Turn(
+        messages=[{"role": m.role, "content": m.content} for m in window],
+        hidden=len(messages) - len(window),
+        summary=convo.summary if upto else None,
+        facts=[(f.id, f.content) for f in memory.pinned_facts()],
+        tools=tools,
+    )
 
 
 def save_reply(convo, content):
@@ -91,6 +121,10 @@ def save_reply(convo, content):
     convo.updated_at = utcnow()
     db.session.commit()
     return reply
+
+
+def reply_text(pieces):
+    return "".join(p for p in pieces if isinstance(p, str))
 
 
 def schedule_title(conversation_id, first_message):
@@ -117,6 +151,13 @@ def schedule_title(conversation_id, first_message):
     threading.Thread(target=run, name=f"title-{conversation_id}", daemon=True).start()
 
 
+def after_reply(convo_id, user_msg_id, reply_msg_id, is_first, first_message):
+    app = current_app._get_current_object()
+    if is_first:
+        schedule_title(convo_id, first_message)
+    jobs.after_turn(app, convo_id, user_msg_id, reply_msg_id)
+
+
 def sse(event, data):
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -126,6 +167,7 @@ def sse(event, data):
 
 def register_routes(app):
     @app.errorhandler(400)
+    @app.errorhandler(403)
     @app.errorhandler(404)
     @app.errorhandler(502)
     def json_error(err):
@@ -153,7 +195,11 @@ def register_routes(app):
     @app.get("/api/conversations/<conversation_id>")
     def get_conversation_with_history(conversation_id):
         convo = get_conversation(conversation_id)
-        return jsonify(conversation=convo.to_dict(), messages=[m.to_dict() for m in convo.messages])
+        return jsonify(
+            conversation=convo.to_dict(),
+            messages=[m.to_dict() for m in convo.messages],
+            summary={"text": convo.summary, "covers_up_to_message_id": convo.summarized_upto_id},
+        )
 
     @app.patch("/api/conversations/<conversation_id>")
     def rename_conversation(conversation_id):
@@ -184,12 +230,11 @@ def register_routes(app):
         convo = get_conversation(conversation_id)
         user_msg, is_first = save_user_message(convo, read_content())
         try:
-            text_reply = bot.generate_reply(history_of(convo))
+            text_reply = reply_text(bot.stream_reply(build_turn(convo, convo.messages)))
         except bot.LLMError as err:
             abort(502, description=str(err))
         reply = save_reply(convo, text_reply)
-        if is_first:
-            schedule_title(convo.id, user_msg.content)
+        after_reply(convo.id, user_msg.id, reply.id, is_first, user_msg.content)
         return jsonify(
             user_message=user_msg.to_dict(),
             reply=reply.to_dict(),
@@ -201,6 +246,7 @@ def register_routes(app):
         """Save the message and stream the reply as Server-Sent Events:
 
         user_message -> the saved message
+        tool         -> {"name", "label"} when Claude starts looking something up
         delta        -> {"text": "..."}, repeated as Claude writes
         done         -> {"reply": ..., "conversation": ...} once the reply is saved
         error        -> {"error": "..."} if Claude failed; nothing is saved
@@ -208,7 +254,7 @@ def register_routes(app):
         convo = get_conversation(conversation_id)
         user_msg, is_first = save_user_message(convo, read_content())
         user_msg_data = user_msg.to_dict()
-        history = history_of(convo)
+        turn = build_turn(convo, convo.messages)
         convo_id = convo.id
 
         @stream_with_context
@@ -216,17 +262,20 @@ def register_routes(app):
             yield sse("user_message", user_msg_data)
             parts = []
             try:
-                for piece in bot.stream_reply(history):
-                    parts.append(piece)
-                    yield sse("delta", {"text": piece})
+                for piece in bot.stream_reply(turn):
+                    if isinstance(piece, str):
+                        parts.append(piece)
+                        yield sse("delta", {"text": piece})
+                    else:
+                        yield sse("tool", {"name": piece.name, "label": mcp.LABELS.get(piece.name, "Working…")})
             except bot.LLMError as err:
                 yield sse("error", {"error": str(err)})
                 return
             current = db.session.get(Conversation, convo_id)
             reply = save_reply(current, "".join(parts))
-            if is_first:
-                schedule_title(convo_id, user_msg_data["content"])
-            yield sse("done", {"reply": reply.to_dict(), "conversation": current.to_dict()})
+            reply_data, convo_data = reply.to_dict(), current.to_dict()
+            after_reply(convo_id, user_msg_data["id"], reply.id, is_first, user_msg_data["content"])
+            yield sse("done", {"reply": reply_data, "conversation": convo_data})
 
         return Response(
             events(),
@@ -242,9 +291,8 @@ def register_routes(app):
             abort(400, description="There is no reply to regenerate")
 
         old = convo.messages[-1]
-        history = history_of(convo)[:-1]
         try:
-            text_reply = bot.generate_reply(history)
+            text_reply = reply_text(bot.stream_reply(build_turn(convo, convo.messages[:-1])))
         except bot.LLMError as err:
             abort(502, description=str(err))  # the old reply stays
         convo.messages.remove(old)  # delete-orphan removes the row

@@ -62,6 +62,18 @@ elif mode == "garbage_line":
     print("this is not json", flush=True)
     message("Still fine")
     result("Still fine")
+elif mode == "tool_then_text":
+    emit({"type": "stream_event", "event": {"type": "message_start"}})
+    emit({"type": "stream_event", "event": {"type": "content_block_start",
+          "content_block": {"type": "tool_use", "name": "mcp__memory__search_history"}}})
+    emit({"type": "assistant", "message": {}})
+    message("Found it.")
+    result("Found it.")
+elif mode == "structured":
+    emit({"type": "result", "subtype": "success", "is_error": False, "result": '{"facts": ["x"]}',
+          "structured_output": {"facts": ["The user is Ravi."]}, "usage": {}})
+elif mode == "structured_text_only":
+    result('{"facts": ["from text"]}')
 elif mode == "slow":
     message("first")
     time.sleep(30)
