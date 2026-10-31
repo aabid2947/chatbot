@@ -8,6 +8,7 @@
 # Usage:  bash db.sh          start (and create the chatbot database/user on first run)
 #         bash db.sh status
 #         bash db.sh stop
+#         bash db.sh info     print tables, chats and messages (backend/db_info.sql)
 
 MY_HOME="$HOME/mysqlportable"
 MY_INI_WIN='C:\Users\aadil\mysqlportable\my.ini'
@@ -61,5 +62,11 @@ case "${1:-start}" in
   start)  start ;;
   stop)   stop ;;
   status) is_up && echo "  mysql  up   ($PORT)" || echo "  mysql  DOWN ($PORT)" ;;
-  *) echo "usage: bash db.sh [start|stop|status]" >&2; exit 1 ;;
+  info)
+    # Tables, columns, chats and messages, from backend/db_info.sql.
+    is_up || { echo "  mysql  is not running. Start it with: bash db.sh" >&2; exit 1; }
+    MYSQL_PWD=chatbot "$MYSQL" --host=127.0.0.1 --port=$PORT -uchatbot chatbot \
+      --default-character-set=utf8mb4 -t < "$(dirname "$0")/backend/db_info.sql"
+    ;;
+  *) echo "usage: bash db.sh [start|stop|status|info]" >&2; exit 1 ;;
 esac

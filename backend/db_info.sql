@@ -1,6 +1,6 @@
 -- Everything in the chatbot database, in four views.
 -- Run from the chatbot folder:
---   ~/mysqlportable/bin/mysql.exe -h127.0.0.1 -uchatbot -pchatbot chatbot -t < backend/db_info.sql
+--   bash db.sh info
 
 -- 1. Tables, exact row counts and size on disk
 SELECT t.table_name AS `table`,
