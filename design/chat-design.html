@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chatbot Design System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* ---------- Design tokens ---------- */
+  :root {
+    --bg: #faf9f6;            /* page: warm off-white */
+    --surface: #ffffff;       /* cards, composer */
+    --surface-2: #f2f0eb;     /* user bubble, hover, sidebar */
+    --sidebar: #f2f0eb;
+    --border: #e5e2da;
+    --border-strong: #d4d0c6;
+    --text: #1d1c1a;
+    --text-2: #5c5a55;
+    --text-3: #8b8881;
+    --accent: #4f46e5;        /* indigo: actions, focus, links */
+    --accent-hover: #4338ca;
+    --accent-soft: #eceafd;
+    --accent-text: #ffffff;
+    --success: #1f8a5b;
+    --danger: #c2410c;
+    --code-bg: #f5f3ee;
+
+    --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-display: "Source Serif 4", Georgia, serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+
+    --r-sm: 6px; --r-md: 10px; --r-lg: 16px; --r-pill: 999px;
+    --shadow-composer: 0 1px 2px rgba(29,28,26,.04), 0 4px 16px rgba(29,28,26,.06);
+    --column: 760px;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --bg: #1b1a18;
+    --surface: #242320;
+    --surface-2: #2e2c29;
+    --sidebar: #161513;
+    --border: #36342f;
+    --border-strong: #4a4740;
+    --text: #ecebe7;
+    --text-2: #b4b1a9;
+    --text-3: #85827a;
+    --accent: #8b85f5;
+    --accent-hover: #a29df8;
+    --accent-soft: #2c2a4a;
+    --accent-text: #15141f;
+    --success: #4fbf8a;
+    --danger: #f08a5d;
+    --code-bg: #1f1e1b;
+    --shadow-composer: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1b1a18; --surface: #242320; --surface-2: #2e2c29; --sidebar: #161513;
+      --border: #36342f; --border-strong: #4a4740; --text: #ecebe7; --text-2: #b4b1a9;
+      --text-3: #85827a; --accent: #8b85f5; --accent-hover: #a29df8; --accent-soft: #2c2a4a;
+      --accent-text: #15141f; --success: #4fbf8a; --danger: #f08a5d; --code-bg: #1f1e1b;
+      --shadow-composer: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  button { font: inherit; color: inherit; cursor: pointer; }
+
+  /* ---------- Page layout ---------- */
+  .page { max-width: 1120px; margin: 0 auto; padding: 0 24px 96px; }
+  .topbar {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 14px 24px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
+  }
+  .topbar .brand { font-weight: 600; display: flex; align-items: center; gap: 10px; }
+  .mark { width: 22px; height: 22px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; }
+  .mark::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-text); }
+  .topbar nav { display: flex; gap: 18px; font-size: 14px; flex-wrap: wrap; }
+  .topbar nav a { color: var(--text-2); text-decoration: none; }
+  .topbar nav a:hover { color: var(--text); }
+  .theme-toggle {
+    border: 1px solid var(--border); background: var(--surface); border-radius: var(--r-pill);
+    padding: 6px 12px; font-size: 13px;
+  }
+
+  header.hero { padding: 72px 0 40px; }
+  .eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em; }
+  h1 { font-size: 44px; line-height: 1.15; margin: 10px 0 16px; }
+  h2 { font-size: 28px; margin: 0 0 8px; }
+  h3 { font-size: 18px; margin: 0 0 6px; }
+  .lede { font-size: 18px; color: var(--text-2); max-width: 640px; margin: 0; }
+
+  section { padding: 56px 0 8px; border-top: 1px solid var(--border); margin-top: 40px; }
+  .section-intro { color: var(--text-2); max-width: 680px; margin: 0 0 28px; }
+
+  .grid { display: grid; gap: 16px; }
+  .g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  @media (max-width: 860px) { .g3, .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 600px) { .g2, .g3, .g4 { grid-template-columns: 1fr; } h1 { font-size: 34px; } }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+    padding: 20px;
+  }
+  .card p { margin: 0; color: var(--text-2); font-size: 14px; }
+  .card ul { margin: 8px 0 0; padding-left: 18px; color: var(--text-2); font-size: 14px; }
+  .card li { margin: 4px 0; }
+  .tag {
+    display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; padding: 2px 8px; border-radius: var(--r-pill);
+    background: var(--surface-2); color: var(--text-2); margin-bottom: 10px;
+  }
+  .tag.ours { background: var(--accent-soft); color: var(--accent); }
+
+  /* ---------- Mockup ---------- */
+  .mock {
+    border: 1px solid var(--border); border-radius: 18px; overflow: hidden;
+    display: grid; grid-template-columns: 248px 1fr; height: 640px; background: var(--bg);
+    box-shadow: 0 10px 40px rgba(0,0,0,.06);
+  }
+  @media (max-width: 760px) { .mock { grid-template-columns: 1fr; } .mock .side { display: none; } }
+  .side { background: var(--sidebar); border-right: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .side .new {
+    display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--r-md);
+    border: 1px solid var(--border-strong); background: var(--surface); font-size: 14px; font-weight: 500; margin-bottom: 12px;
+  }
+  .side .label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); padding: 10px 10px 4px; font-weight: 600; }
+  .side .item {
+    padding: 7px 10px; border-radius: 8px; font-size: 14px; color: var(--text-2);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .side .item:hover { background: var(--surface-2); color: var(--text); }
+  .side .item.active { background: var(--surface); color: var(--text); box-shadow: inset 0 0 0 1px var(--border); }
+  .side .foot { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 10px; border-top: 1px solid var(--border); font-size: 14px; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 12px; font-weight: 600; }
+
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .main .bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .main .bar .title { font-weight: 500; }
+  .model-pill { font-size: 12px; color: var(--text-2); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 3px 10px; }
+  .thread { flex: 1; overflow-y: auto; padding: 28px 20px 12px; }
+  .thread-inner { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+
+  .msg-user {
+    align-self: flex-end; max-width: 78%; background: var(--surface-2); color: var(--text);
+    padding: 10px 16px; border-radius: 18px 18px 6px 18px; white-space: pre-wrap;
+  }
+  .msg-bot { display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: start; }
+  .msg-bot .who { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; margin-top: 2px; }
+  .msg-bot .who::after { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--accent-text); }
+  .msg-bot .body > *:first-child { margin-top: 0; }
+  .msg-bot .body p { margin: 0 0 12px; }
+  .msg-bot .body ul { margin: 0 0 12px; padding-left: 20px; }
+  .msg-bot .body li { margin: 4px 0; }
+  .msg-bot .actions { display: flex; gap: 4px; margin-top: 4px; opacity: .7; }
+  .msg-bot .actions button { border: 0; background: transparent; padding: 4px 8px; border-radius: 6px; font-size: 12px; color: var(--text-3); }
+  .msg-bot .actions button:hover { background: var(--surface-2); color: var(--text); }
+  code { font-family: var(--font-mono); font-size: .88em; background: var(--code-bg); border: 1px solid var(--border); padding: 1px 5px; border-radius: 5px; }
+  pre.code {
+    margin: 0 0 12px; background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--r-md);
+    overflow: hidden; font-family: var(--font-mono); font-size: 13px; line-height: 1.55;
+  }
+  pre.code .head { display: flex; justify-content: space-between; padding: 6px 12px; border-bottom: 1px solid var(--border); font-family: var(--font-ui); font-size: 12px; color: var(--text-3); }
+  pre.code code { display: block; background: none; border: 0; padding: 12px; overflow-x: auto; }
+  .typing { display: inline-flex; gap: 4px; padding: 10px 0; }
+  .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); animation: blink 1.2s infinite ease-in-out; }
+  .typing span:nth-child(2) { animation-delay: .15s; } .typing span:nth-child(3) { animation-delay: .3s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+  @media (prefers-reduced-motion: reduce) { .typing span { animation: none; opacity: .6; } }
+
+  .composer-wrap { padding: 8px 20px 18px; }
+  .composer {
+    max-width: 680px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 22px; box-shadow: var(--shadow-composer); padding: 10px 10px 10px 18px;
+    display: flex; align-items: flex-end; gap: 8px;
+  }
+  .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-composer); }
+  .composer textarea {
+    flex: 1; border: 0; outline: 0; resize: none; background: transparent; color: var(--text);
+    font: inherit; padding: 6px 0; min-height: 24px; max-height: 160px;
+  }
+  .icon-btn {
+    width: 34px; height: 34px; border-radius: 50%; border: 0; display: grid; place-items: center; flex-shrink: 0;
+  }
+  .icon-btn.ghost { background: transparent; color: var(--text-2); }
+  .icon-btn.ghost:hover { background: var(--surface-2); }
+  .icon-btn.send { background: var(--accent); color: var(--accent-text); }
+  .icon-btn.send:hover { background: var(--accent-hover); }
+  .icon-btn.send:disabled { background: var(--surface-2); color: var(--text-3); cursor: default; }
+  .hint { max-width: 680px; margin: 8px auto 0; text-align: center; font-size: 12px; color: var(--text-3); }
+
+  /* ---------- Token displays ---------- */
+  .swatch { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; background: var(--surface); }
+  .swatch .chip { height: 64px; border-bottom: 1px solid var(--border); }
+  .swatch .meta { padding: 10px 12px; font-size: 13px; }
+  .swatch .meta b { display: block; font-weight: 600; }
+  .swatch .meta span { color: var(--text-3); font-family: var(--font-mono); font-size: 12px; }
+  .swatch .meta em { display: block; font-style: normal; color: var(--text-2); font-size: 12px; margin-top: 2px; }
+
+  .type-row { display: grid; grid-template-columns: 160px 1fr; gap: 16px; align-items: baseline; padding: 14px 0; border-bottom: 1px solid var(--border); }
+  .type-row:last-child { border-bottom: 0; }
+  .type-row .spec { font-size: 12px; color: var(--text-3); font-family: var(--font-mono); }
+  @media (max-width: 600px) { .type-row { grid-template-columns: 1fr; gap: 4px; } }
+
+  .scale { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+  .scale div { text-align: center; font-size: 12px; color: var(--text-3); font-family: var(--font-mono); }
+  .scale i { display: block; background: var(--accent-soft); border: 1px solid var(--accent); margin: 0 auto 6px; border-radius: 3px; }
+  .radii { display: flex; gap: 16px; flex-wrap: wrap; }
+  .radii div { width: 84px; height: 64px; background: var(--surface-2); border: 1px solid var(--border-strong); display: grid; place-items: end center; padding-bottom: 6px; font-size: 11px; font-family: var(--font-mono); color: var(--text-3); }
+
+  /* ---------- Component specimens ---------- */
+  .specimen { background: var(--bg); border: 1px dashed var(--border-strong); border-radius: var(--r-md); padding: 18px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .btn { border-radius: var(--r-md); padding: 8px 14px; font-size: 14px; font-weight: 500; border: 1px solid transparent; }
+  .btn.primary { background: var(--accent); color: var(--accent-text); }
+  .btn.secondary { background: var(--surface); border-color: var(--border-strong); }
+  .btn.ghost { background: transparent; color: var(--text-2); }
+  .btn.danger { background: transparent; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .suggest { display: flex; gap: 8px; flex-wrap: wrap; }
+  .suggest button { border: 1px solid var(--border); background: var(--surface); border-radius: var(--r-pill); padding: 7px 14px; font-size: 13px; color: var(--text-2); }
+  .suggest button:hover { border-color: var(--border-strong); color: var(--text); }
+  .error-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: var(--r-md); background: color-mix(in srgb, var(--danger) 10%, var(--surface)); color: var(--danger); font-size: 14px; }
+  .error-row button { border: 0; background: transparent; color: inherit; font-weight: 600; text-decoration: underline; }
+
+  .rules { counter-reset: rule; display: grid; gap: 10px; }
+  .rule { display: grid; grid-template-columns: 34px 1fr; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 14px 16px; }
+  .rule::before { counter-increment: rule; content: counter(rule, decimal-leading-zero); font-family: var(--font-mono); font-size: 13px; color: var(--accent); padding-top: 2px; }
+  .rule b { display: block; }
+  .rule span { color: var(--text-2); font-size: 14px; }
+
+  .dd { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .dd { grid-template-columns: 1fr; } }
+  .dd .card h3 { font-family: var(--font-ui); font-size: 14px; font-weight: 600; }
+  .dd .do h3 { color: var(--success); } .dd .dont h3 { color: var(--danger); }
+
+  .compare { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+  .compare th, .compare td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .compare th { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); background: var(--surface-2); }
+  .compare td:first-child { font-weight: 500; white-space: nowrap; }
+  .compare td.ours { color: var(--text); background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
+  .compare tr:last-child td { border-bottom: 0; }
+  .table-wrap { overflow-x: auto; border-radius: var(--r-lg); }
+
+  footer { margin-top: 64px; color: var(--text-3); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="mark"></span> Chatbot design system</div>
+  <nav>
+    <a href="#references">References</a>
+    <a href="#mockup">Mockup</a>
+    <a href="#tokens">Tokens</a>
+    <a href="#components">Components</a>
+    <a href="#rules">Rules</a>
+  </nav>
+  <button class="theme-toggle" id="themeToggle">Toggle theme</button>
+</div>
+
+<div class="page">
+
+  <header class="hero">
+    <div class="eyebrow">Design direction · v0.1</div>
+    <h1>Calm, readable, and out of the way.</h1>
+    <p class="lede">A chat UI style guide for our chatbot. It borrows the layout patterns people already know from Claude and ChatGPT, then sets its own colors, type and rules so it feels like its own product.</p>
+  </header>
+
+  <!-- ===================== REFERENCES ===================== -->
+  <section id="references">
+    <div class="eyebrow">01 · References</div>
+    <h2>What we take from each</h2>
+    <p class="section-intro">Both apps solve the same problem in slightly different ways. We're not copying either one. We're picking the patterns that make chat easy to read and easy to use.</p>
+
+    <div class="grid g3">
+      <div class="card">
+        <span class="tag">Claude</span>
+        <h3>Warmth and reading comfort</h3>
+        <ul>
+          <li>Warm off-white background instead of pure white</li>
+          <li>Serif display type gives it a calm, editorial feel</li>
+          <li>Long answers read like a document, not a chat bubble</li>
+          <li>Generous line height and spacing</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="tag">ChatGPT</span>
+        <h3>Familiar structure</h3>
+        <ul>
+          <li>Single centered column, about 750px wide</li>
+          <li>User messages in a soft grey bubble on the right</li>
+          <li>Assistant replies as plain text, no bubble</li>
+          <li>Rounded "pill" composer pinned to the bottom</li>
+          <li>Small action row under each reply (copy, retry)</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="tag ours">Ours</span>
+        <h3>The blend</h3>
+        <ul>
+          <li>ChatGPT's layout, Claude's warmth</li>
+          <li>Indigo accent, already used in the app, for actions and focus only</li>
+          <li>Serif only for big headings. Everything else is Inter</li>
+          <li>Light and dark themes from day one</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:16px">
+      <table class="compare">
+        <thead><tr><th>Element</th><th>Claude</th><th>ChatGPT</th><th>Ours</th></tr></thead>
+        <tbody>
+          <tr><td>Background</td><td>Warm cream</td><td>Neutral white / near-black</td><td class="ours">Warm off-white <code>#faf9f6</code>, warm charcoal in dark</td></tr>
+          <tr><td>User message</td><td>Light bubble</td><td>Grey bubble, right-aligned</td><td class="ours">Warm grey bubble, right, tail corner bottom-right</td></tr>
+          <tr><td>Assistant message</td><td>Plain text, document style</td><td>Plain text, full width</td><td class="ours">Plain text with a small avatar mark on the left</td></tr>
+          <tr><td>Composer</td><td>Large rounded box</td><td>Pill, centered</td><td class="ours">Rounded box (22px radius), accent ring on focus</td></tr>
+          <tr><td>Headings</td><td>Serif</td><td>Sans</td><td class="ours">Serif for page titles, sans for everything in the chat</td></tr>
+          <tr><td>Accent</td><td>Terracotta orange</td><td>Black / white</td><td class="ours">Indigo <code>#4f46e5</code>, used sparingly</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===================== MOCKUP ===================== -->
+  <section id="mockup">
+    <div class="eyebrow">02 · Mockup</div>
+    <h2>The chat screen</h2>
+    <p class="section-intro">This is a working mockup. Type in the box and press Enter to see the send and typing states. Use "Toggle theme" at the top to check dark mode.</p>
+
+    <div class="mock">
+      <aside class="side">
+        <div class="new">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          New chat
+        </div>
+        <div class="label">Today</div>
+        <div class="item active">Plan a 3-day trip to Jaipur</div>
+        <div class="item">Explain Flask blueprints</div>
+        <div class="label">Previous 7 days</div>
+        <div class="item">MySQL index for chat history</div>
+        <div class="item">Rewrite my cover letter intro</div>
+        <div class="item">React useEffect cleanup question</div>
+        <div class="foot"><span class="avatar">PA</span> Parth</div>
+      </aside>
+
+      <div class="main">
+        <div class="bar">
+          <span class="title">Plan a 3-day trip to Jaipur</span>
+          <span class="model-pill">Assistant</span>
+        </div>
+        <div class="thread" id="thread">
+          <div class="thread-inner" id="threadInner">
+            <div class="msg-user">Plan a 3-day trip to Jaipur. I like food and old buildings, not shopping.</div>
+            <div class="msg-bot">
+              <div class="who" aria-hidden="true"></div>
+              <div class="body">
+                <p>Here's a relaxed plan that leans on forts, palaces and street food.</p>
+                <p><b>Day 1 · Old city</b></p>
+                <ul>
+                  <li>Morning at Hawa Mahal, then City Palace</li>
+                  <li>Lunch: pyaaz kachori at a local sweet shop</li>
+                  <li>Evening at Jantar Mantar before it closes</li>
+                </ul>
+                <p><b>Day 2 · Amer and Nahargarh</b></p>
+                <ul>
+                  <li>Go to Amer Fort early to beat the crowds</li>
+                  <li>Sunset from Nahargarh Fort</li>
+                </ul>
+                <p>Want me to turn this into a printable list with timings?</p>
+                <div class="actions">
+                  <button>Copy</button><button>Retry</button><button>👍</button><button>👎</button>
+                </div>
+              </div>
+            </div>
+            <div class="msg-user">Yes, and add a rough budget.</div>
+            <div class="msg-bot">
+              <div class="who" aria-hidden="true"></div>
+              <div class="body">
+                <p>Sure. Here's a budget you can paste into a spreadsheet:</p>
+                <pre class="code"><div class="head"><span>csv</span><span>Copy</span></div><code>item,per_day_inr
+stay,2500
+food,1200
+entry_fees,800
+transport,900</code></pre>
+                <p>That's about <code>₹5,400</code> a day, or ₹16,200 for the trip.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="composer-wrap">
+          <form class="composer" id="composer">
+            <button type="button" class="icon-btn ghost" aria-label="Attach">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <textarea id="input" rows="1" placeholder="Message the assistant…"></textarea>
+            <button type="submit" class="icon-btn send" id="send" aria-label="Send" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </form>
+          <div class="hint">Enter to send · Shift + Enter for a new line</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== TOKENS ===================== -->
+  <section id="tokens">
+    <div class="eyebrow">03 · Tokens</div>
+    <h2>Color</h2>
+    <p class="section-intro">Mostly warm neutrals. The accent is for things you can click or that have focus. It's never used for large areas or body text.</p>
+
+    <div class="grid g4" id="swatches"></div>
+
+    <h2 style="margin-top:48px">Typography</h2>
+    <p class="section-intro">Inter for the interface and messages. Source Serif for page titles and empty-state headings only. JetBrains Mono for code.</p>
+    <div class="card">
+      <div class="type-row"><div class="spec">Display · Serif 44/1.15</div><div style="font-family:var(--font-display);font-size:44px;line-height:1.15;font-weight:600">How can I help?</div></div>
+      <div class="type-row"><div class="spec">Heading · Serif 28</div><div style="font-family:var(--font-display);font-size:28px;font-weight:600">Section heading</div></div>
+      <div class="type-row"><div class="spec">Message · Inter 15/1.6</div><div>Chat text is 15px with a 1.6 line height. Long answers stay easy to read.</div></div>
+      <div class="type-row"><div class="spec">UI · Inter 14 / 500</div><div style="font-size:14px;font-weight:500">Sidebar items, buttons, labels</div></div>
+      <div class="type-row"><div class="spec">Caption · Inter 12</div><div style="font-size:12px;color:var(--text-3)">Hints, timestamps, helper text</div></div>
+      <div class="type-row"><div class="spec">Code · Mono 13</div><div style="font-family:var(--font-mono);font-size:13px">const reply = await api.sendMessage(id, text)</div></div>
+    </div>
+
+    <div class="grid g2" style="margin-top:48px">
+      <div>
+        <h2>Spacing</h2>
+        <p class="section-intro">4px base. Use only these steps.</p>
+        <div class="scale">
+          <div><i style="width:4px;height:4px"></i>4</div>
+          <div><i style="width:8px;height:8px"></i>8</div>
+          <div><i style="width:12px;height:12px"></i>12</div>
+          <div><i style="width:16px;height:16px"></i>16</div>
+          <div><i style="width:24px;height:24px"></i>24</div>
+          <div><i style="width:32px;height:32px"></i>32</div>
+          <div><i style="width:48px;height:48px"></i>48</div>
+        </div>
+      </div>
+      <div>
+        <h2>Radius</h2>
+        <p class="section-intro">Rounder as the element gets bigger.</p>
+        <div class="radii">
+          <div style="border-radius:6px">6 · tag</div>
+          <div style="border-radius:10px">10 · button</div>
+          <div style="border-radius:16px">16 · card</div>
+          <div style="border-radius:22px">22 · composer</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== COMPONENTS ===================== -->
+  <section id="components">
+    <div class="eyebrow">04 · Components</div>
+    <h2>Building blocks</h2>
+    <p class="section-intro">Each piece with the states it needs to handle.</p>
+
+    <div class="grid g2">
+      <div class="card">
+        <h3>Messages</h3>
+        <div class="specimen">
+          <div class="msg-user">User: soft bubble, right side</div>
+          <div class="msg-bot"><div class="who"></div><div class="body"><p style="margin:0">Assistant: plain text with an avatar mark. No bubble, so long answers read like a page.</p></div></div>
+          <div class="msg-bot"><div class="who"></div><div class="body"><div class="typing"><span></span><span></span><span></span></div></div></div>
+        </div>
+        <p>The typing dots show while waiting. They stop moving if the user has reduced motion turned on.</p>
+      </div>
+
+      <div class="card">
+        <h3>Buttons</h3>
+        <div class="specimen">
+          <div class="btn-row">
+            <button class="btn primary">Primary</button>
+            <button class="btn secondary">Secondary</button>
+            <button class="btn ghost">Ghost</button>
+            <button class="btn danger">Delete chat</button>
+          </div>
+        </div>
+        <p>One primary button per view at most. In the chat itself, the send button is the primary.</p>
+      </div>
+
+      <div class="card">
+        <h3>Empty state with suggestions</h3>
+        <div class="specimen" style="align-items:center;text-align:center;padding:28px 18px">
+          <div style="font-family:var(--font-display);font-size:26px;font-weight:600">How can I help today?</div>
+          <div class="suggest" style="justify-content:center">
+            <button>Plan a trip</button><button>Explain some code</button><button>Draft an email</button>
+          </div>
+        </div>
+        <p>Shown on a new chat. Clicking a suggestion fills the composer. It doesn't send straight away.</p>
+      </div>
+
+      <div class="card">
+        <h3>Error</h3>
+        <div class="specimen">
+          <div class="error-row">Couldn't reach the server. <button>Retry</button></div>
+        </div>
+        <p>Errors sit just above the composer. The user's text goes back into the box so nothing is lost.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== RULES ===================== -->
+  <section id="rules">
+    <div class="eyebrow">05 · Style rules</div>
+    <h2>The rules</h2>
+    <p class="section-intro">Short enough to remember. If a new screen breaks one of these, it needs a good reason.</p>
+
+    <div class="rules">
+      <div class="rule"><div><b>One reading column.</b><span>Messages and composer share a centered column no wider than 760px. Lines stay short enough to read comfortably.</span></div></div>
+      <div class="rule"><div><b>Only the user gets a bubble.</b><span>The user's message sits in a soft bubble on the right. The assistant's reply is plain text on the page.</span></div></div>
+      <div class="rule"><div><b>Accent means "you can act here".</b><span>Indigo is for the send button, focus rings, links and the selected state. Never for backgrounds or body text.</span></div></div>
+      <div class="rule"><div><b>Warm neutrals, never pure white or pure black.</b><span>The page is <code>#faf9f6</code> in light and <code>#1b1a18</code> in dark. Pure #fff is only for raised surfaces like the composer.</span></div></div>
+      <div class="rule"><div><b>Serif for titles, sans for chat.</b><span>Source Serif appears on page titles and the empty-state greeting. Messages, UI and labels use Inter.</span></div></div>
+      <div class="rule"><div><b>Use tokens, not raw values.</b><span>Every color, radius and spacing comes from the list above. If something is missing, add a token instead of a one-off value.</span></div></div>
+      <div class="rule"><div><b>Every state is designed.</b><span>Empty, typing, sent, error and long content (code, lists, very long words) all have a look before the screen ships.</span></div></div>
+      <div class="rule"><div><b>Both themes, always.</b><span>Each new component is checked in light and dark before it's done.</span></div></div>
+      <div class="rule"><div><b>Readable at phone width.</b><span>At 640px and below the sidebar hides, bubbles can grow to 90% width, and side padding is 16px.</span></div></div>
+      <div class="rule"><div><b>Keyboard first.</b><span>Enter sends and Shift + Enter adds a line. Focus is always visible. Focus goes back to the composer after sending.</span></div></div>
+    </div>
+
+    <div class="dd" style="margin-top:24px">
+      <div class="card do">
+        <h3>✓ Do</h3>
+        <ul>
+          <li>Let assistant answers breathe. Use 24px between turns</li>
+          <li>Put copy and retry under replies, quiet until hovered</li>
+          <li>Keep the composer visible and pinned to the bottom</li>
+          <li>Name chats from their first message</li>
+        </ul>
+      </div>
+      <div class="card dont">
+        <h3>✕ Don't</h3>
+        <ul>
+          <li>Put the assistant in a coloured bubble</li>
+          <li>Use the accent for decoration or big fills</li>
+          <li>Use Claude's or ChatGPT's logos, names or exact colors in the product</li>
+          <li>Add shadows to messages. Only the composer is raised</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>Local design reference for the chatbot project · chatbot/design/chat-design.html</footer>
+</div>
+
+<script>
+  // Theme toggle (remembered per browser, works without storage too)
+  const root = document.documentElement;
+  try { const t = localStorage.getItem('chat-design-theme'); if (t) root.dataset.theme = t; } catch (e) {}
+  document.getElementById('themeToggle').addEventListener('click', () => {
+    const dark = root.dataset.theme
+      ? root.dataset.theme === 'dark'
+      : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+    try { localStorage.setItem('chat-design-theme', root.dataset.theme); } catch (e) {}
+    renderSwatches();
+  });
+
+  // Color swatches read live from the tokens, so they always match the theme
+  const SWATCHES = [
+    ['--bg', 'Background', 'Page'],
+    ['--surface', 'Surface', 'Composer, cards'],
+    ['--surface-2', 'Surface 2', 'User bubble, hover'],
+    ['--border', 'Border', 'Dividers'],
+    ['--text', 'Text', 'Body and messages'],
+    ['--text-2', 'Text 2', 'Secondary text'],
+    ['--text-3', 'Text 3', 'Hints, captions'],
+    ['--accent', 'Accent', 'Send, focus, links'],
+    ['--accent-soft', 'Accent soft', 'Focus ring, selected'],
+    ['--success', 'Success', 'Positive states'],
+    ['--danger', 'Danger', 'Errors, delete'],
+    ['--code-bg', 'Code', 'Code blocks'],
+  ];
+  function renderSwatches() {
+    const css = getComputedStyle(root);
+    document.getElementById('swatches').innerHTML = SWATCHES.map(([v, name, use]) => {
+      const val = css.getPropertyValue(v).trim();
+      return `<div class="swatch"><div class="chip" style="background:var(${v})"></div>
+        <div class="meta"><b>${name}</b><span>${v} · ${val}</span><em>${use}</em></div></div>`;
+    }).join('');
+  }
+  renderSwatches();
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderSwatches);
+
+  // Interactive mockup composer
+  const input = document.getElementById('input');
+  const send = document.getElementById('send');
+  const form = document.getElementById('composer');
+  const inner = document.getElementById('threadInner');
+  const thread = document.getElementById('thread');
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function autosize() {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+    send.disabled = !input.value.trim();
+  }
+  input.addEventListener('input', autosize);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+  });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    inner.insertAdjacentHTML('beforeend', `<div class="msg-user">${esc(text)}</div>`);
+    inner.insertAdjacentHTML('beforeend', `<div class="msg-bot" id="pending"><div class="who"></div><div class="body"><div class="typing"><span></span><span></span><span></span></div></div></div>`);
+    input.value = ''; autosize();
+    thread.scrollTop = thread.scrollHeight;
+    setTimeout(() => {
+      document.getElementById('pending').outerHTML =
+        `<div class="msg-bot"><div class="who"></div><div class="body"><p>This is a design mockup, so I'm only showing how a reply looks. You said: “${esc(text)}”.</p><div class="actions"><button>Copy</button><button>Retry</button></div></div></div>`;
+      thread.scrollTop = thread.scrollHeight;
+    }, 1100);
+  });
+</script>
+</body>
+</html>

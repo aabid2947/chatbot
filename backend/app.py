@@ -5,7 +5,7 @@ from flask import Flask, abort, jsonify, request
 from sqlalchemy import text
 
 from bot import generate_reply
-from models import Conversation, Message, db
+from models import Conversation, Message, db, utcnow
 
 load_dotenv()
 
@@ -89,9 +89,7 @@ def register_routes(app):
         if convo.title == "New chat" and len(convo.messages) == 1:
             convo.title = content[:60] + ("…" if len(content) > 60 else "")
 
-        history = [{"role": m.role, "content": m.content} for m in convo.messages]
-        reply = Message(conversation=convo, role="assistant", content=generate_reply(history))
-        db.session.add(reply)
+        reply = add_reply(convo)
         db.session.commit()
 
         return jsonify(
@@ -99,6 +97,30 @@ def register_routes(app):
             reply=reply.to_dict(),
             conversation=convo.to_dict(),
         ), 201
+
+    @app.post("/api/conversations/<int:conversation_id>/regenerate")
+    def regenerate(conversation_id):
+        """Replace the last assistant reply with a fresh one."""
+        convo = get_conversation(conversation_id)
+        if not convo.messages or convo.messages[-1].role != "assistant":
+            abort(400, description="There is no reply to regenerate")
+
+        convo.messages.remove(convo.messages[-1])  # delete-orphan removes the row
+        reply = add_reply(convo)
+        db.session.commit()
+
+        return jsonify(reply=reply.to_dict(), conversation=convo.to_dict()), 201
+
+
+def add_reply(convo):
+    """Generate the assistant's reply to the conversation so far and stage it."""
+    history = [{"role": m.role, "content": m.content} for m in convo.messages]
+    reply = Message(conversation=convo, role="assistant", content=generate_reply(history))
+    db.session.add(reply)
+    # Bump explicitly: adding messages doesn't touch the conversation row itself,
+    # and the sidebar sorts by this.
+    convo.updated_at = utcnow()
+    return reply
 
 
 app = create_app()

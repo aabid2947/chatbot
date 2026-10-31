@@ -1,179 +1,287 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
+import Composer from './components/Composer'
+import Message, { TypingIndicator } from './components/Message'
+import Sidebar from './components/Sidebar'
+import { CloseIcon, MenuIcon, PlusIcon } from './components/icons'
 import './App.css'
+
+const SUGGESTIONS = ['Plan a 3-day trip', 'Explain some code', 'Draft an email', 'Summarize an article']
+
+function readSavedTheme() {
+  try {
+    return localStorage.getItem('theme')
+  } catch {
+    return null
+  }
+}
 
 export default function App() {
   const [conversations, setConversations] = useState([])
-  const [activeId, setActiveId] = useState(null)
-  const [messages, setMessages] = useState([])
+  const [activeId, setActiveId] = useState(null) // null = a new, unsaved chat
+  // Messages plus which chat they belong to, so switching never shows the wrong chat.
+  const [thread, setThread] = useState({ id: null, list: [] })
   const [draft, setDraft] = useState('')
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState(null)
-  const bottomRef = useRef(null)
+  const [pending, setPending] = useState(false) // waiting on the bot
+  const [pendingThread, setPendingThread] = useState(null)
+  const [error, setError] = useState(null) // { text, retry? }
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  const [theme, setTheme] = useState(readSavedTheme) // 'light' | 'dark' | null (follow system)
+  const [systemDark, setSystemDark] = useState(
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches,
+  )
+  const isDark = theme ? theme === 'dark' : systemDark
+
   const inputRef = useRef(null)
-  // Which chat is on screen right now, readable from inside async handlers.
-  const activeRef = useRef(null)
+  const scrollRef = useRef(null)
+  const activeRef = useRef(null) // current chat, readable inside async handlers
+  const justCreatedRef = useRef(null) // chat we created locally; don't refetch over it
+
   useEffect(() => {
     activeRef.current = activeId
   }, [activeId])
 
+  // ---- Theme ----
   useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = (e) => setSystemDark(e.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+
+  useEffect(() => {
+    const root = document.documentElement
+    if (theme) root.dataset.theme = theme
+    else delete root.dataset.theme
+    try {
+      if (theme) localStorage.setItem('theme', theme)
+    } catch {
+      /* storage blocked: theme still applies for this visit */
+    }
+  }, [theme])
+
+  // ---- Data loading ----
+  const loadConversations = useCallback(() => {
     api
       .listConversations()
       .then((list) => {
         setConversations(list)
-        if (list.length) setActiveId(list[0].id)
+        setError(null)
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => setError({ text: e.message, retry: loadConversations }))
   }, [])
 
+  useEffect(loadConversations, [loadConversations])
+
   useEffect(() => {
-    if (activeId == null) return
+    if (activeId == null || justCreatedRef.current === activeId) return
     let cancelled = false
     api
       .listMessages(activeId)
-      .then((m) => !cancelled && setMessages(m))
-      .catch((e) => !cancelled && setError(e.message))
+      .then((list) => !cancelled && setThread({ id: activeId, list }))
+      .catch((e) => !cancelled && setError({ text: e.message }))
     return () => {
       cancelled = true
     }
   }, [activeId])
 
+  const shown = thread.id === activeId ? thread.list : []
+  const showTyping = pending && pendingThread === activeId
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, sending])
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [shown.length, showTyping, activeId])
 
-  async function newChat() {
+  // ---- Actions ----
+  function openChat(id) {
+    justCreatedRef.current = null
+    setActiveId(id)
     setError(null)
+    setSidebarOpen(false)
+  }
+
+  function newChat() {
+    justCreatedRef.current = null
+    setActiveId(null)
+    setThread({ id: null, list: [] })
+    setError(null)
+    setSidebarOpen(false)
+    inputRef.current?.focus()
+  }
+
+  async function deleteChat(convo) {
+    if (!window.confirm(`Delete "${convo.title}"? This can't be undone.`)) return
     try {
-      const convo = await api.createConversation()
-      setConversations((list) => [convo, ...list])
-      setActiveId(convo.id)
-      inputRef.current?.focus()
+      await api.deleteConversation(convo.id)
+      setConversations((list) => list.filter((c) => c.id !== convo.id))
+      if (convo.id === activeRef.current) newChat()
     } catch (e) {
-      setError(e.message)
+      setError({ text: e.message })
     }
   }
 
-  async function removeChat(id) {
+  async function send(text) {
+    const content = text.trim()
+    if (!content || pending) return
     setError(null)
-    try {
-      await api.deleteConversation(id)
-      const rest = conversations.filter((c) => c.id !== id)
-      setConversations(rest)
-      if (id === activeId) setActiveId(rest[0]?.id ?? null)
-    } catch (e) {
-      setError(e.message)
-    }
-  }
+    setDraft('')
+    setPending(true)
 
-  async function send(e) {
-    e.preventDefault()
-    const content = draft.trim()
-    if (!content || sending) return
-    setError(null)
-    setSending(true)
-
+    // Show the user's message straight away.
+    const temp = { id: `temp-${Date.now()}`, role: 'user', content }
     let id = activeId
+    setPendingThread(id)
+    setThread((t) => ({ id, list: t.id === id ? [...t.list, temp] : [temp] }))
+
     try {
       if (id == null) {
         const convo = await api.createConversation()
-        setConversations((list) => [convo, ...list])
-        setActiveId(convo.id)
         id = convo.id
-        activeRef.current = id
+        justCreatedRef.current = id
+        setConversations((list) => [convo, ...list])
+        if (activeRef.current == null) {
+          setThread((t) => (t.id == null ? { ...t, id } : t))
+          setActiveId(id)
+          activeRef.current = id
+        }
+        setPendingThread(id)
       }
-      // Show the user's message right away; replace it with the saved one after.
-      const pending = { id: `pending-${Date.now()}`, role: 'user', content }
-      setMessages((m) => [...m, pending])
-      setDraft('')
 
       const res = await api.sendMessage(id, content)
-      // Skip if the user moved to another chat meanwhile; it reloads from the server.
-      if (activeRef.current === id) {
-        setMessages((m) => [
-          ...m.filter((x) => x.id !== pending.id && x.id !== res.user_message.id),
-          res.user_message,
-          res.reply,
-        ])
-      }
-      setConversations((list) => [
-        res.conversation,
-        ...list.filter((c) => c.id !== res.conversation.id),
-      ])
+      setConversations((list) => [res.conversation, ...list.filter((c) => c.id !== id)])
+      setThread((t) =>
+        t.id === id
+          ? {
+              id,
+              list: [
+                ...t.list.filter((m) => m.id !== temp.id && m.id !== res.user_message.id),
+                res.user_message,
+                res.reply,
+              ],
+            }
+          : t,
+      )
     } catch (e) {
-      setError(e.message)
-      setDraft(content)
-      setMessages((m) => m.filter((x) => !String(x.id).startsWith('pending-')))
+      // Put the text back so nothing is lost.
+      setThread((t) => ({ ...t, list: t.list.filter((m) => m.id !== temp.id) }))
+      if (activeRef.current === id) setDraft(content)
+      setError({ text: e.message, retry: () => send(content) })
     } finally {
-      setSending(false)
+      setPending(false)
       inputRef.current?.focus()
     }
   }
 
-  const shown = activeId == null ? [] : messages
-
-  function onKeyDown(e) {
-    if (e.key === 'Enter' && !e.shiftKey) send(e)
+  async function retryLast() {
+    const id = activeId
+    const last = shown[shown.length - 1]
+    if (pending || id == null || last?.role !== 'assistant') return
+    setError(null)
+    setPending(true)
+    setPendingThread(id)
+    setThread((t) => ({ ...t, list: t.list.slice(0, -1) }))
+    try {
+      const res = await api.regenerate(id)
+      setThread((t) => (t.id === id ? { ...t, list: [...t.list, res.reply] } : t))
+      setConversations((list) => [res.conversation, ...list.filter((c) => c.id !== id)])
+    } catch (e) {
+      setThread((t) => (t.id === id ? { ...t, list: [...t.list, last] } : t))
+      setError({ text: e.message, retry: retryLast })
+    } finally {
+      setPending(false)
+    }
   }
+
+  function pickSuggestion(text) {
+    setDraft(text)
+    inputRef.current?.focus()
+  }
+
+  const activeTitle = conversations.find((c) => c.id === activeId)?.title ?? 'New chat'
+  const isEmpty = shown.length === 0 && !showTyping && (activeId == null || thread.id === activeId)
+  const lastIndex = shown.length - 1
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <button className="new-chat" onClick={newChat}>
-          + New chat
-        </button>
-        <ul className="chat-list">
-          {conversations.map((c) => (
-            <li key={c.id} className={c.id === activeId ? 'active' : ''}>
-              <button className="chat-title" onClick={() => setActiveId(c.id)} title={c.title}>
-                {c.title}
-              </button>
-              <button
-                className="chat-delete"
-                onClick={() => removeChat(c.id)}
-                aria-label={`Delete ${c.title}`}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      </aside>
+      <Sidebar
+        conversations={conversations}
+        activeId={activeId}
+        open={sidebarOpen}
+        isDark={isDark}
+        onSelect={openChat}
+        onNew={newChat}
+        onDelete={deleteChat}
+        onClose={() => setSidebarOpen(false)}
+        onToggleTheme={() => setTheme(isDark ? 'light' : 'dark')}
+      />
 
-      <main className="chat">
-        <div className="messages">
-          {shown.length === 0 && !sending && (
-            <div className="empty">
-              <h1>Chatbot</h1>
-              <p>Send a message to start a conversation.</p>
-            </div>
-          )}
-          {shown.map((m) => (
-            <div key={m.id} className={`bubble ${m.role}`}>
-              {m.content}
-            </div>
-          ))}
-          {sending && <div className="bubble assistant typing">…</div>}
-          <div ref={bottomRef} />
+      <main className="main">
+        <header className="topbar">
+          <button
+            className="icon-btn ghost mobile-only"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open chats"
+          >
+            <MenuIcon />
+          </button>
+          <h1 className="topbar-title">{activeTitle}</h1>
+          <button className="icon-btn ghost mobile-only" onClick={newChat} aria-label="New chat">
+            <PlusIcon size={18} />
+          </button>
+        </header>
+
+        <div className="thread" ref={scrollRef}>
+          <div className="thread-inner">
+            {isEmpty ? (
+              <div className="empty">
+                <h2>How can I help today?</h2>
+                <div className="suggestions">
+                  {SUGGESTIONS.map((s) => (
+                    <button key={s} onClick={() => pickSuggestion(s)}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              shown.map((m, i) => (
+                <Message
+                  key={m.id}
+                  message={m}
+                  canRetry={i === lastIndex && m.role === 'assistant' && !pending}
+                  onRetry={retryLast}
+                />
+              ))
+            )}
+            {showTyping && <TypingIndicator />}
+          </div>
         </div>
 
-        {error && <div className="error">{error}</div>}
+        {error && (
+          <div className="error-row" role="alert">
+            <span>{error.text}</span>
+            <div className="error-actions">
+              {error.retry && (
+                <button className="error-retry" onClick={error.retry}>
+                  Retry
+                </button>
+              )}
+              <button className="error-close" onClick={() => setError(null)} aria-label="Dismiss">
+                <CloseIcon />
+              </button>
+            </div>
+          </div>
+        )}
 
-        <form className="composer" onSubmit={send}>
-          <textarea
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Type a message…"
-            rows={1}
-            autoFocus
-          />
-          <button type="submit" disabled={sending || !draft.trim()}>
-            Send
-          </button>
-        </form>
+        <Composer
+          value={draft}
+          onChange={setDraft}
+          onSubmit={() => send(draft)}
+          busy={pending}
+          inputRef={inputRef}
+        />
       </main>
     </div>
   )

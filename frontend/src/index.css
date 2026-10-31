@@ -1,37 +1,81 @@
+/* Design tokens — see design/chat-design.html. Use these, not raw values. */
 :root {
-  --bg: #f7f7f8;
-  --panel: #ffffff;
-  --sidebar: #1f2328;
-  --sidebar-text: #e6e8eb;
-  --sidebar-hover: #2d333b;
-  --text: #1f2328;
-  --muted: #6b7280;
-  --border: #e3e5e8;
+  --bg: #faf9f6;
+  --surface: #ffffff;
+  --surface-2: #f2f0eb;
+  --sidebar: #f2f0eb;
+  --border: #e5e2da;
+  --border-strong: #d4d0c6;
+  --text: #1d1c1a;
+  --text-2: #5c5a55;
+  --text-3: #8b8881;
   --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eceafd;
   --accent-text: #ffffff;
-  --bot-bubble: #ffffff;
-  --error-bg: #fdecec;
-  --error-text: #a12626;
+  --success: #1f8a5b;
+  --danger: #c2410c;
+  --code-bg: #f5f3ee;
+  --backdrop: rgba(29, 28, 26, 0.35);
+  --shadow-composer: 0 1px 2px rgba(29, 28, 26, 0.04), 0 4px 16px rgba(29, 28, 26, 0.06);
 
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  line-height: 1.5;
-  color: var(--text);
-  background: var(--bg);
-  -webkit-font-smoothing: antialiased;
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Source Serif 4', Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 16px;
+  --r-composer: 22px;
+  --r-pill: 999px;
+  --column: 760px;
+
+  color-scheme: light;
 }
 
+/* Dark: explicit choice, or system preference when no choice was made. */
+:root[data-theme='dark'] {
+  --bg: #1b1a18;
+  --surface: #242320;
+  --surface-2: #2e2c29;
+  --sidebar: #161513;
+  --border: #36342f;
+  --border-strong: #4a4740;
+  --text: #ecebe7;
+  --text-2: #b4b1a9;
+  --text-3: #85827a;
+  --accent: #8b85f5;
+  --accent-hover: #a29df8;
+  --accent-soft: #2c2a4a;
+  --accent-text: #15141f;
+  --success: #4fbf8a;
+  --danger: #f08a5d;
+  --code-bg: #1f1e1b;
+  --backdrop: rgba(0, 0, 0, 0.55);
+  --shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
+  color-scheme: dark;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #15171a;
-    --panel: #1c1f23;
-    --sidebar: #0f1113;
-    --sidebar-hover: #23272d;
-    --text: #e6e8eb;
-    --muted: #9aa1ab;
-    --border: #2d333b;
-    --bot-bubble: #23272d;
-    --error-bg: #3a1d1d;
-    --error-text: #f3b4b4;
+  :root:not([data-theme='light']) {
+    --bg: #1b1a18;
+    --surface: #242320;
+    --surface-2: #2e2c29;
+    --sidebar: #161513;
+    --border: #36342f;
+    --border-strong: #4a4740;
+    --text: #ecebe7;
+    --text-2: #b4b1a9;
+    --text-3: #85827a;
+    --accent: #8b85f5;
+    --accent-hover: #a29df8;
+    --accent-soft: #2c2a4a;
+    --accent-text: #15141f;
+    --success: #4fbf8a;
+    --danger: #f08a5d;
+    --code-bg: #1f1e1b;
+    --backdrop: rgba(0, 0, 0, 0.55);
+    --shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
+    color-scheme: dark;
   }
 }
 
@@ -46,8 +90,28 @@ body,
   margin: 0;
 }
 
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.6 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
 button,
 textarea {
   font: inherit;
   color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--accent);
 }
